@@ -179,3 +179,30 @@ async def test_pdf_export(db, config, vault, evidence, signer):
         manifest = json.loads(archive.read("manifest.json"))
     assert pdf.startswith(b"%PDF")
     assert "chat.pdf" in manifest["files"]
+
+
+async def test_stickers_and_thumbnails_in_exports(db, config, vault, evidence, signer):
+    exporter = Exporter(db, replace(config, export_pdf=True), vault, evidence, signer)
+    await db.upsert_chat(CHAT, "S", "private", None)
+    sticker, sticker_sha, sticker_size = vault.write(f"media/{CHAT}/1_5.webp", b"RIFF0000WEBPVP8 ")
+    tgs, tgs_sha, tgs_size = vault.write(f"media/{CHAT}/2_6.tgs", b"lottie")
+    thumb, _, _ = vault.write(f"media/{CHAT}/2_6_thumb.webp", b"RIFF1111WEBPVP8 ")
+    await add(db, evidence, MessageRecord(CHAT, 1, "2026-10-01T09:00:00+00:00", sender_id=CHAT, media_type="sticker",
+                                          media_uid="doc:5", media_path=sticker, media_size=sticker_size),
+              media_sha=sticker_sha)
+    await add(db, evidence, MessageRecord(CHAT, 2, "2026-10-01T09:01:00+00:00", sender_id=CHAT, media_type="sticker",
+                                          media_uid="doc:6", media_path=tgs, media_size=tgs_size), media_sha=tgs_sha)
+    await db.conn.execute("UPDATE messages SET thumb_path = ? WHERE message_id = 2", (thumb,))
+    await db.conn.commit()
+
+    views = exporter.build_views(await db.get_chat(CHAT), await db.chat_messages(CHAT), {})
+    assert views[0].media.pdf_src == "media/1_5.webp"
+    assert views[1].media.pdf_src == "media/2_6_thumb.webp"
+
+    parts = await exporter.export(CHAT)
+    with zipfile.ZipFile(parts[0]) as archive:
+        names = archive.namelist()
+        html = archive.read("chat.html").decode()
+    assert "media/2_6_thumb.webp" in names and "media/2_6.tgs" in names
+    assert 'class="bubble sticker"' in html
+    assert '<img src="media/2_6_thumb.webp"' in html

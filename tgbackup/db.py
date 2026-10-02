@@ -264,11 +264,12 @@ class Database:
         size: int | None,
         note: str | None,
         sha256: str | None = None,
+        thumb_path: str | None = None,
     ) -> None:
         await self.conn.execute(
             "UPDATE messages SET media_path = ?, media_size = COALESCE(?, media_size), media_note = ?, "
-            "media_sha256 = ? WHERE chat_id = ? AND message_id = ?",
-            (path, size, note, sha256, chat_id, message_id),
+            "media_sha256 = ?, thumb_path = ? WHERE chat_id = ? AND message_id = ?",
+            (path, size, note, sha256, thumb_path, chat_id, message_id),
         )
         await self.conn.commit()
 

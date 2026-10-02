@@ -47,6 +47,8 @@ class MediaView:
     name: str | None = None
     note: str | None = None
     sha256: str | None = None
+    thumb_rel: str | None = None
+    thumb_href: str | None = None
 
     @property
     def size_label(self) -> str:
@@ -57,8 +59,18 @@ class MediaView:
         return Path(self.href).suffix.lower() if self.href else ""
 
     @property
+    def static_sticker(self) -> bool:
+        return self.type == "sticker" and self.ext in {".webp", ".png", ".jpg"}
+
+    @property
+    def pdf_src(self) -> str | None:
+        if self.href and self.size <= PDF_IMAGE_LIMIT and (self.type == "photo" or self.static_sticker):
+            return self.href
+        return self.thumb_href
+
+    @property
     def pdf_image(self) -> bool:
-        return self.type == "photo" and self.href is not None and self.size <= PDF_IMAGE_LIMIT
+        return self.pdf_src is not None
 
 
 @dataclass
@@ -350,6 +362,9 @@ class Exporter:
                 view.note = view.note or "файл не найден на диске"
         elif row["media_size"]:
             view.size = row["media_size"]
+        if row["thumb_path"] and self.vault.exists(row["thumb_path"]):
+            view.thumb_rel = row["thumb_path"]
+            view.thumb_href = media_arcname(self.vault, row["thumb_path"])
         return view
 
     def split_parts(self, views: list[MessageView]) -> list[list[MessageView]]:
@@ -430,6 +445,8 @@ class Exporter:
         for view in part:
             if view.media and view.media.rel:
                 media_files[view.media.href] = view.media.rel
+            if view.media and view.media.thumb_rel:
+                media_files[view.media.thumb_href] = view.media.thumb_rel
         for entry in entries:
             if entry.media_path and self.vault.exists(entry.media_path):
                 media_files.setdefault(media_arcname(self.vault, entry.media_path), entry.media_path)
@@ -602,10 +619,11 @@ class Exporter:
         workdir = Path(tempfile.mkdtemp(dir=self.config.tmp_dir))
         try:
             for view in part:
-                if view.media and view.media.pdf_image and view.media.href in media_files:
-                    target = workdir / view.media.href
+                source = view.media.pdf_src if view.media else None
+                if source and source in media_files:
+                    target = workdir / source
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(self.vault.read(media_files[view.media.href]))
+                    target.write_bytes(self.vault.read(media_files[source]))
             html = self.env.get_template("chat_pdf.html").render(**common)
             return HTML(string=html, base_url=str(workdir)).write_pdf()
         except Exception:

@@ -108,12 +108,17 @@ def describe(message: Message, info: MediaInfo) -> str | None:
     return None
 
 
+THUMB_TYPES = {"video", "video_note", "animation", "sticker"}
+STATIC_STICKER_EXT = {".webp", ".png", ".jpg"}
+
+
 @dataclass(frozen=True)
 class StoredMedia:
     path: str | None
     note: str | None
     sha256: str | None = None
     size: int | None = None
+    thumb_path: str | None = None
 
 
 class MediaDownloader:
@@ -148,7 +153,26 @@ class MediaDownloader:
         if not data:
             return StoredMedia(None, "не удалось скачать медиа")
         stored, digest, size = await asyncio.to_thread(self.vault.write, rel, data)
-        return StoredMedia(stored, None, digest, size)
+        thumb = None
+        if info.type in THUMB_TYPES and not (info.type == "sticker" and ext in STATIC_STICKER_EXT):
+            thumb = await self.download_thumb(message, f"media/{chat_id}/{message.id}_{suffix}_thumb")
+        return StoredMedia(stored, None, digest, size, thumb)
+
+    async def download_thumb(self, message: Message, rel_base: str) -> str | None:
+        document = message.document
+        if document is None or not document.thumbs:
+            return None
+        async with self._semaphore:
+            try:
+                data = await self.client.download_media(message, file=bytes, thumb=-1)
+            except Exception:
+                log.debug("Thumbnail download failed msg=%s", message.id, exc_info=True)
+                return None
+        if not data:
+            return None
+        ext = ".webp" if data[:4] == b"RIFF" else ".jpg"
+        stored, _, _ = await asyncio.to_thread(self.vault.write, f"{rel_base}{ext}", data)
+        return stored
 
     async def download_profile_photo(self, user, photo_id: int) -> StoredMedia:
         async with self._semaphore:

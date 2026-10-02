@@ -185,6 +185,11 @@ CREATE INDEX ix_messages_unread_out ON messages (chat_id, outgoing, read_at);
 """
 
 
+V4_THUMBS = """
+ALTER TABLE messages ADD COLUMN thumb_path TEXT;
+"""
+
+
 @dataclass(frozen=True)
 class Migration:
     version: int
@@ -196,6 +201,7 @@ MIGRATIONS = [
     Migration(1, "base schema", V1_BASE),
     Migration(2, "evidence chain, profiles, anchors", V2_EVIDENCE),
     Migration(3, "chain guard trigger, read receipts", V3_GUARDS_READS),
+    Migration(4, "media thumbnails", V4_THUMBS),
 ]
 
 LATEST = MIGRATIONS[-1].version

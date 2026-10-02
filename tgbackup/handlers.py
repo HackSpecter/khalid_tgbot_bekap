@@ -173,7 +173,7 @@ class Tracker:
         stored = await self.downloader.download(message, record.chat_id, info)
         await self.db.set_media(
             record.chat_id, record.message_id, stored.path, stored.size or info.size, stored.note or record.media_note,
-            stored.sha256,
+            stored.sha256, stored.thumb_path,
         )
         return stored
 
@@ -254,6 +254,7 @@ class Tracker:
                 stored.size if stored else record.media_size,
                 (stored.note if stored else None) or record.media_note,
                 stored.sha256 if stored else None,
+                stored.thumb_path if stored else None,
             )
         if notify and self.should_notify(record.chat_id, record.outgoing):
             await self.notify_edit(old, record, media_changed)

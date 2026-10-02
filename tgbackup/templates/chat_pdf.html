@@ -6,114 +6,154 @@
 <style>
 @page {
   size: A4;
-  margin: 16mm 13mm 20mm 13mm;
-  @top-left { content: "{{ title | css }} · id {{ chat_id }}{% if total > 1 %} · часть {{ part }}/{{ total }}{% endif %}"; font-size: 7.5pt; color: #666; }
-  @top-right { content: "tgbackup {{ version }} · {{ generated_utc }}"; font-size: 7.5pt; color: #666; }
-  @bottom-left { content: "SHA-256 записей: {{ records_digest }}"; font-size: 6.5pt; color: #444; font-family: "DejaVu Sans Mono", monospace; }
-  @bottom-right { content: "стр. " counter(page) " из " counter(pages); font-size: 8pt; color: #444; }
+  margin: 12mm 11mm 14mm 11mm;
+  @top-left { content: "{{ title | css }} · id {{ chat_id }}{% if total > 1 %} · часть {{ part }}/{{ total }}{% endif %}"; font: 6.5pt "DejaVu Sans"; color: #8a96a3; }
+  @top-right { content: "tgbackup {{ version }} · {{ generated_utc }}"; font: 6.5pt "DejaVu Sans"; color: #8a96a3; }
+  @bottom-left { content: "SHA-256 записей {{ records_digest }}"; font: 5.5pt "DejaVu Sans Mono"; color: #8a96a3; }
+  @bottom-right { content: counter(page) " / " counter(pages); font: 7pt "DejaVu Sans"; color: #5b6670; }
 }
 * { box-sizing: border-box; }
-body { font-family: "DejaVu Sans", "Noto Sans", Arial, sans-serif; font-size: 9pt; color: #111; line-height: 1.35; }
-h1 { font-size: 15pt; margin: 0 0 2mm; }
-h2 { font-size: 11pt; margin: 5mm 0 2mm; border-bottom: 0.4pt solid #999; padding-bottom: 1mm; }
-table.info { border-collapse: collapse; width: 100%; margin-bottom: 2mm; }
-table.info th { text-align: left; width: 38mm; color: #555; font-weight: normal; vertical-align: top; padding: 0.6mm 2mm 0.6mm 0; }
-table.info td { padding: 0.6mm 0; vertical-align: top; word-break: break-word; }
-code, .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 7.5pt; word-break: break-all; }
-.day { text-align: center; font-weight: bold; margin: 4mm 0 2mm; color: #333; page-break-after: avoid; }
-.msg { border: 0.4pt solid #bbb; border-radius: 2mm; padding: 2mm 3mm; margin: 0 0 2mm; page-break-inside: avoid; }
-.msg.out { background: #f1fbe9; margin-left: 12mm; }
-.msg.in { background: #fafafa; margin-right: 12mm; }
-.msg.service { background: #eef1f5; text-align: center; margin-left: 20mm; margin-right: 20mm; }
-.msg.deleted { border: 1pt dashed #d33; background: #fff3f3; }
-.head { font-size: 8pt; color: #333; margin-bottom: 1mm; }
-.head b { color: #000; }
-.time { font-size: 7.5pt; color: #555; }
-.flag-del { color: #c00; font-weight: bold; }
-.flag-edit { color: #a66d00; font-weight: bold; }
-.flag-read { color: #1f6fb5; }
-.text { white-space: pre-wrap; word-break: break-word; }
-.reply { border-left: 1.2pt solid #4091de; padding-left: 2mm; color: #444; font-size: 8pt; margin-bottom: 1mm; }
-.fwd { color: #2a6db0; font-size: 8pt; margin-bottom: 1mm; }
-.media { color: #444; font-size: 8pt; margin: 1mm 0; }
-.media img { max-width: 70mm; max-height: 70mm; display: block; margin: 1mm 0; }
-.edits { font-size: 8pt; margin-top: 1.5mm; border-top: 0.3pt dotted #999; padding-top: 1mm; }
-.edits .old { white-space: pre-wrap; color: #444; }
-.hash { font-size: 6.5pt; color: #777; margin-top: 1mm; font-family: "DejaVu Sans Mono", monospace; word-break: break-all; }
-ul.hist { margin: 0; padding-left: 4mm; }
+html { font-family: "DejaVu Sans", sans-serif; font-size: 8.4pt; line-height: 1.3; color: #0f1419; }
+body { margin: 0; }
+.mono { font-family: "DejaVu Sans Mono", monospace; }
+
+.head { border: 0.5pt solid #dfe5ea; border-radius: 2.5mm; padding: 3mm 3.5mm; margin-bottom: 3mm; background: #f7f9fb; }
+.head h1 { font-size: 12.5pt; margin: 0 0 0.6mm; }
+.head .sub { color: #5b6670; font-size: 7.5pt; margin-bottom: 2mm; }
+.grid { width: 100%; border-collapse: collapse; font-size: 7.3pt; }
+.grid td { padding: 0.35mm 1.5mm 0.35mm 0; vertical-align: top; word-break: break-word; }
+.grid td.k { color: #7a8691; white-space: nowrap; width: 22mm; }
+.grid .mono { font-size: 6.3pt; word-break: break-all; }
+.hist { margin: 1.5mm 0 0; padding: 0; list-style: none; font-size: 6.8pt; color: #5b6670; }
+.hist li { margin: 0.3mm 0; }
+
+.day { text-align: center; margin: 2.6mm 0 1.6mm; page-break-after: avoid; }
+.day span { background: #e8edf1; color: #4a5560; border-radius: 3mm; padding: 0.5mm 2.6mm; font-size: 7pt; font-weight: bold; }
+
+.row { margin: 0.9mm 0; text-align: left; page-break-inside: avoid; }
+.row.out { text-align: right; }
+.row.gap { margin-top: 1.8mm; }
+.b {
+  display: inline-block; text-align: left; max-width: 74%; min-width: 22mm;
+  background: #f1f3f5; border-radius: 2.4mm; padding: 1.2mm 2.2mm 1mm;
+}
+.out .b { background: #e3f5d4; }
+.b.del { background: #fdecec; border-left: 0.9mm solid #e5484d; }
+.b.sticker { background: none; padding: 0; min-width: 0; }
+.b.sticker.del { padding-left: 1.4mm; }
+.name { font-weight: bold; font-size: 7.6pt; margin-bottom: 0.3mm; }
+.fwd { color: #2a7ec7; font-size: 7pt; margin-bottom: 0.4mm; }
+.reply { border-left: 0.6mm solid #4091de; background: #eaf2fb; padding: 0.3mm 1.5mm; margin: 0.2mm 0 0.8mm; font-size: 7pt; color: #44505b; }
+.reply b { color: #2a7ec7; }
+.t { white-space: pre-wrap; word-break: break-word; }
+.media { margin: 0.4mm 0 0.6mm; }
+.media img { display: block; max-width: 62mm; max-height: 58mm; border-radius: 1.6mm; }
+.media.sticker img { max-width: 26mm; max-height: 26mm; border-radius: 0; }
+.media.video_note img { width: 30mm; height: 30mm; border-radius: 15mm; }
+.cap { font-size: 6.8pt; color: #5b6670; margin-top: 0.4mm; }
+.file { font-size: 7.2pt; color: #2b3640; }
+.note { font-size: 6.6pt; color: #7a8691; font-style: italic; }
+.foot { text-align: right; font-size: 6.5pt; color: #7a8691; margin-top: 0.3mm; white-space: nowrap; }
+.out .foot { color: #5f9c45; }
+.foot .del { color: #d93a3f; font-weight: bold; }
+.foot .ed { color: #b07800; }
+.foot .rd { color: #2a7ec7; }
+.meta { font-size: 5.2pt; color: #a3adb6; margin: 0.25mm 0.8mm 0; }
+.edits { border-top: 0.3pt dashed #c9d1d8; margin-top: 0.8mm; padding-top: 0.5mm; font-size: 6.8pt; color: #5b6670; }
+.edits .old { white-space: pre-wrap; text-decoration: line-through; }
+.react { display: inline-block; background: #e3eefa; border-radius: 2mm; padding: 0 1.4mm; font-size: 7pt; margin-top: 0.4mm; }
+
+.svc { text-align: center; margin: 1.2mm 0; page-break-inside: avoid; }
+.svc span { display: inline-block; background: #eef1f4; color: #44505b; border-radius: 2.6mm; padding: 0.5mm 2.6mm; font-size: 7pt; }
+.svc span.del { background: #fdecec; color: #b0262b; }
+.svc .meta { text-align: center; }
 </style>
 </head>
 <body>
-<h1>{{ title }}</h1>
-<table class="info">
-  <tr><th>Чат</th><td>id <code>{{ chat_id }}</code> · тип {{ chat_type }}{% if username %} · @{{ username }}{% endif %}</td></tr>
-  <tr><th>Экспорт</th><td>{{ generated }} ({{ generated_utc }}), часовой пояс {{ timezone }}{% if total > 1 %}, часть {{ part }} из {{ total }}{% endif %}</td></tr>
-  <tr><th>Сообщений</th><td>{{ stats.messages }} (изменено {{ stats.edited }}, удалено {{ stats.deleted }}, медиа {{ stats.media }})</td></tr>
-  {% if period %}<tr><th>Период</th><td>{{ period[0] }} — {{ period[1] }}</td></tr>{% endif %}
-  <tr><th>SHA-256 записей</th><td><code>{{ records_digest }}</code></td></tr>
-  <tr><th>Голова цепочки</th><td>seq {{ head_seq }} · <code>{{ head_hash }}</code></td></tr>
-  <tr><th>Ключ подписи</th><td>Ed25519 · <code>{{ fingerprint }}</code></td></tr>
-  {% if anchors %}
-  <tr><th>Метки времени</th><td>
-    {% for a in anchors %}seq {{ a.seq }}: RFC 3161 {{ a.tsa_time or '—' }}; OpenTimestamps {{ a.ots_status or '—' }}{% if a.ots_block %} (блок {{ a.ots_block }}){% endif %}<br>{% endfor %}
-  </td></tr>
-  {% endif %}
-</table>
-
-{% if interlocutor %}
-<h2>Собеседник</h2>
-<table class="info">
-  <tr><th>User ID</th><td><code>{{ interlocutor.user_id }}</code></td></tr>
-  <tr><th>Имя</th><td>{{ interlocutor.name or '—' }}</td></tr>
-  <tr><th>Username</th><td>{% if interlocutor.username %}@{{ interlocutor.username }}{% else %}—{% endif %}</td></tr>
-  <tr><th>Телефон</th><td>{{ interlocutor.phone or 'скрыт настройками приватности' }}</td></tr>
-  {% if interlocutor.bio %}<tr><th>О себе</th><td>{{ interlocutor.bio }}</td></tr>{% endif %}
-  <tr><th>Все известные имена</th><td>{{ interlocutor.known_names | join('; ') or '—' }}</td></tr>
-  <tr><th>Все username</th><td>{% for u in interlocutor.known_usernames %}@{{ u }}{{ '; ' if not loop.last }}{% else %}—{% endfor %}</td></tr>
-  {% if interlocutor.known_phones %}<tr><th>Телефоны</th><td>{{ interlocutor.known_phones | join('; ') }}</td></tr>{% endif %}
-  {% if interlocutor.is_bot %}<tr><th>Тип</th><td>бот</td></tr>{% endif %}
-</table>
-{% if interlocutor.history %}
-<ul class="hist">
-  {% for h in interlocutor.history %}
-  <li>{{ h.at }} ({{ h.at_utc }}, {{ h.source }}): {% for field, old, new in h.changes %}{{ field }}: {{ old or '—' }} → {{ new or '—' }}{{ '; ' if not loop.last }}{% endfor %}</li>
-  {% endfor %}
-</ul>
-{% endif %}
-{% endif %}
-
-<h2>Сообщения</h2>
-{% for m in messages %}
-  {% if m.new_day %}<div class="day">{{ m.day }}</div>{% endif %}
-  <div class="msg {{ 'service' if m.service else ('out' if m.outgoing else 'in') }}{{ ' deleted' if m.deleted_at }}">
-    <div class="head">
-      <b>#{{ m.message_id }}</b> · <b>{{ 'Я' if m.outgoing else m.sender }}</b>{% if m.sender_id %} (id {{ m.sender_id }}){% endif %}<br>
-      <span class="time">{{ m.utc_time }} · {{ m.full_time }} ({{ timezone }})</span>
-      {% if m.edited_at %}<br><span class="flag-edit">изменено {{ m.edited_at_utc }} · {{ m.edited_at }}</span>{% endif %}
-      {% if m.deleted_at %}<br><span class="flag-del">удалено {{ m.deleted_at_utc }} · {{ m.deleted_at }}</span>{% endif %}
-      {% if m.read_at %}<br><span class="flag-read">прочитано собеседником не позднее {{ m.read_at_utc }} · {{ m.read_at }}</span>{% endif %}
-    </div>
-    {% if m.fwd %}<div class="fwd">↪ Переслано от {{ m.fwd }}</div>{% endif %}
-    {% if m.reply %}<div class="reply">в ответ на {% if m.reply.sender %}{{ m.reply.sender }}: {% endif %}{{ m.reply.text }}</div>{% endif %}
-    {% if m.service %}<div class="text">{{ m.service }}</div>{% endif %}
-    {% if m.media %}
-    <div class="media">
-      [{{ m.media.label }}{% if m.media.size_label %}, {{ m.media.size_label }}{% endif %}{% if m.media.name %}, {{ m.media.name }}{% endif %}]
-      {% if m.media.pdf_image %}<img src="{{ m.media.href }}">{% endif %}
-      {% if m.media.note %}<br><i>{{ m.media.note }}</i>{% endif %}
-      {% if m.media.sha256 %}<div class="hash">файл sha256 {{ m.media.sha256 }}</div>{% endif %}
-    </div>
-    {% endif %}
-    {% if m.text %}<div class="text">{{ m.text }}</div>{% endif %}
-    {% if m.reactions %}<div class="media">Реакции: {{ m.reactions }}</div>{% endif %}
-    {% if m.edits %}
-    <div class="edits">
-      История изменений:
-      {% for e in m.edits %}<div>до {{ e.at_utc }} ({{ e.at }}):<div class="old">{{ e.text or '—' }}</div></div>{% endfor %}
-    </div>
-    {% endif %}
-    {% if m.record_hash %}<div class="hash">запись seq {{ m.first_seq }} · sha256 {{ m.record_hash }}</div>{% endif %}
+<section class="head">
+  <h1>{{ title }}</h1>
+  <div class="sub">
+    id {{ chat_id }} · {{ chat_type }}{% if username %} · @{{ username }}{% endif %}
+    · {{ stats.messages }} сообщ. · изменено {{ stats.edited }} · удалено {{ stats.deleted }} · медиа {{ stats.media }}
+    {% if period %} · {{ period[0] }} — {{ period[1] }}{% endif %}
   </div>
+  <table class="grid">
+    {% if interlocutor %}
+    <tr>
+      <td class="k">Собеседник</td>
+      <td>{{ interlocutor.name or '—' }}{% if interlocutor.username %} · @{{ interlocutor.username }}{% endif %} · user_id <span class="mono">{{ interlocutor.user_id }}</span>{% if interlocutor.is_bot %} · бот{% endif %}</td>
+      <td class="k">Телефон</td>
+      <td>{{ interlocutor.phone or 'скрыт' }}</td>
+    </tr>
+    <tr>
+      <td class="k">Все имена</td>
+      <td>{{ interlocutor.known_names | join('; ') or '—' }}</td>
+      <td class="k">Username</td>
+      <td>{% for u in interlocutor.known_usernames %}@{{ u }}{{ '; ' if not loop.last }}{% else %}—{% endfor %}</td>
+    </tr>
+    {% if interlocutor.bio %}<tr><td class="k">О себе</td><td colspan="3">{{ interlocutor.bio }}</td></tr>{% endif %}
+    {% endif %}
+    <tr>
+      <td class="k">Экспорт</td>
+      <td>{{ generated }} ({{ timezone }}) · {{ generated_utc }}{% if total > 1 %} · часть {{ part }}/{{ total }}{% endif %}</td>
+      <td class="k">Метки времени</td>
+      <td>{% for a in anchors %}seq {{ a.seq }}: TSA {{ (a.tsa_time or '—')[:16] }}, OTS {{ a.ots_status or '—' }}{% if a.ots_block %} #{{ a.ots_block }}{% endif %}{{ '; ' if not loop.last }}{% else %}ещё нет{% endfor %}</td>
+    </tr>
+    <tr><td class="k">SHA-256 записей</td><td class="mono" colspan="3">{{ records_digest }}</td></tr>
+    <tr><td class="k">Голова цепочки</td><td class="mono" colspan="3">seq {{ head_seq }} · {{ head_hash }}</td></tr>
+    <tr><td class="k">Ключ подписи</td><td class="mono" colspan="3">Ed25519 {{ fingerprint }}</td></tr>
+  </table>
+  {% if interlocutor and interlocutor.history %}
+  <ul class="hist">
+    {% for h in interlocutor.history %}
+    <li>👤 {{ h.at }} ({{ h.source }}): {% for field, old, new in h.changes %}{{ field }} {{ old or '—' }} → {{ new or '—' }}{{ '; ' if not loop.last }}{% endfor %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+{% for m in messages %}
+  {% if m.new_day %}<div class="day"><span>{{ m.day }}</span></div>{% endif %}
+  {% if m.service %}
+  <div class="svc">
+    <span class="{{ 'del' if m.deleted_at }}">{{ m.service }} · {{ m.time }}{% if m.deleted_at %} · удалено {{ m.deleted_at[11:16] }}{% endif %}</span>
+    <div class="meta mono">#{{ m.message_id }} · {{ m.utc_time }}{% if m.record_hash %} · seq {{ m.first_seq }} · {{ m.record_hash[:16] }}{% endif %}</div>
+  </div>
+  {% else %}
+  <div class="row {{ 'out' if m.outgoing else 'in' }}{{ ' gap' if m.show_sender or m.new_day }}">
+    <div class="b{{ ' del' if m.deleted_at }}{{ ' sticker' if m.media and m.media.type == 'sticker' and m.media.pdf_image and not m.text }}">
+      {% if m.show_sender and not m.outgoing %}<div class="name" style="color: {{ m.color }}">{{ m.sender }}</div>{% endif %}
+      {% if m.fwd %}<div class="fwd">↪ {{ m.fwd }}</div>{% endif %}
+      {% if m.reply %}<div class="reply">{% if m.reply.sender %}<b>{{ m.reply.sender }}</b> {% endif %}{{ m.reply.text }}</div>{% endif %}
+      {% if m.media %}
+      <div class="media {{ m.media.type }}">
+        {% if m.media.pdf_image %}
+          <img src="{{ m.media.pdf_src }}">
+          {% if m.media.type in ('video', 'animation') %}<div class="cap">▶ {{ m.media.label }}{% if m.media.size_label %} · {{ m.media.size_label }}{% endif %}</div>
+          {% elif m.media.type == 'video_note' %}<div class="cap">● кружок</div>
+          {% elif m.media.type == 'sticker' and not m.media.static_sticker %}<div class="cap">анимированный стикер</div>{% endif %}
+        {% else %}
+          <div class="file">{{ '🎤' if m.media.type == 'voice' else ('🎵' if m.media.type == 'audio' else ('🎬' if m.media.type in ('video', 'video_note', 'animation') else '📎')) }} {{ m.media.label }}{% if m.media.name and m.media.type == 'document' %} · {{ m.media.name }}{% endif %}{% if m.media.size_label %} · {{ m.media.size_label }}{% endif %}</div>
+        {% endif %}
+        {% if m.media.note %}<div class="note">{{ m.media.note }}</div>{% endif %}
+      </div>
+      {% endif %}
+      {% if m.text %}<div class="t">{{ m.text }}</div>{% endif %}
+      {% if m.reactions %}<div class="react">{{ m.reactions }}</div>{% endif %}
+      {% if m.edits %}
+      <div class="edits">
+        {% for e in m.edits %}<div>было до {{ e.at[11:16] if e.at[:10] == m.full_time[:10] else e.at[:16] }}: <span class="old">{{ e.text or '—' }}</span></div>{% endfor %}
+      </div>
+      {% endif %}
+      <div class="foot">
+        {% if m.deleted_at %}<span class="del">удалено {{ m.deleted_at[11:16] if m.deleted_at[:10] == m.full_time[:10] else m.deleted_at[:16] }}</span> · {% endif %}
+        {% if m.edited_at %}<span class="ed">изм. {{ m.edited_at[11:16] }}</span> · {% endif %}
+        {{ m.full_time[11:19] }}{% if m.outgoing %} <span class="{{ 'rd' if m.read_at }}">{{ '✓✓' if m.read_at else '✓' }}</span>{% endif %}
+      </div>
+    </div>
+    <div class="meta mono">#{{ m.message_id }} · {{ m.utc_time }}{% if m.deleted_at_utc %} · удалено {{ m.deleted_at_utc[11:19] }} UTC{% endif %}{% if m.read_at_utc %} · прочитано ≤ {{ m.read_at_utc[11:19] }} UTC{% endif %}{% if m.record_hash %} · seq {{ m.first_seq }} · {{ m.record_hash[:16] }}{% endif %}</div>
+  </div>
+  {% endif %}
 {% endfor %}
 </body>
 </html>
