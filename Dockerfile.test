@@ -1,0 +1,7 @@
+FROM khalid-tgbackup:latest
+USER root
+COPY requirements-dev.txt pytest.ini ./
+RUN pip install pytest==9.1.1 pytest-asyncio==1.4.0
+COPY tests ./tests
+USER app
+CMD ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"]

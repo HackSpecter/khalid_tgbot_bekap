@@ -1,51 +1,59 @@
+import json
 import zipfile
 from dataclasses import replace
 
 from tgbackup.db import MessageRecord
 from tgbackup.deletions import DeletionAggregator
-from tgbackup.exporter import Exporter
+from tgbackup.evidence import EVENT_DELETE
 
 
-class FakeNotifier:
-    def __init__(self):
-        self.texts = []
-        self.files = []
-
-    async def send_text(self, text):
-        self.texts.append(text)
-
-    async def send_file(self, path, caption="", *, as_document=False):
-        self.files.append((path, caption))
-
-
-async def seed(db, chat_id, count, outgoing=False):
+async def seed(db, evidence, chat_id, count, outgoing=False):
     await db.upsert_chat(chat_id, f"chat{chat_id}", "private", None)
     for i in range(1, count + 1):
-        await db.save_message(
-            MessageRecord(chat_id, chat_id * 1000 + i, f"2026-10-01T09:00:{i:02d}+00:00",
-                          sender_id=chat_id, sender_name="Петя", text=f"msg {i}", outgoing=outgoing)
-        )
+        record = MessageRecord(chat_id, chat_id * 1000 + i, f"2026-10-01T09:00:{i:02d}+00:00",
+                               sender_id=chat_id, sender_name="Петя", text=f"msg {i}", outgoing=outgoing)
+        await db.save_message(record)
+        entry = await evidence.append("new", chat_id=chat_id, message_id=record.message_id, raw={"text": record.text})
+        await db.link_evidence(chat_id, record.message_id, entry.seq, entry.record_hash)
 
 
-async def test_small_deletion_notifies_each(db, config):
-    notifier = FakeNotifier()
-    agg = DeletionAggregator(replace(config, bulk_delete_threshold=5), db, Exporter(db, config), notifier)
-    await seed(db, 7, 3)
+def aggregator(config, db, exporter, notifier, evidence, **overrides):
+    return DeletionAggregator(replace(config, **overrides), db, exporter, notifier, evidence)
 
-    await agg.add(None, [7001, 7002])
+
+async def test_small_deletion_notifies_each(db, config, exporter, notifier, evidence):
+    agg = aggregator(config, db, exporter, notifier, evidence, bulk_delete_threshold=5)
+    await seed(db, evidence, 7, 3)
+
+    assert await agg.add(None, [7001, 7002], {"_": "UpdateDeleteMessages"}) == 2
+    assert (await db.get_message(7, 7001))["deleted"] == 1
     await agg.flush()
 
     assert len(notifier.texts) == 2
     assert "msg 1" in notifier.texts[0] and "Петя" in notifier.texts[0]
-    assert (await db.get_message(7, 7001))["deleted"] == 1
     assert (await db.get_message(7, 7003))["deleted"] == 0
 
 
-async def test_bulk_deletion_sends_export(db, config):
-    notifier = FakeNotifier()
-    agg = DeletionAggregator(replace(config, bulk_delete_threshold=5), db, Exporter(db, config), notifier)
-    await seed(db, 8, 6)
-    await seed(db, 9, 1)
+async def test_deletion_is_logged_on_receipt(db, config, exporter, notifier, evidence):
+    agg = aggregator(config, db, exporter, notifier, evidence)
+    await seed(db, evidence, 7, 2)
+    first = await db.get_message(7, 7001)
+
+    await agg.add(None, [7001, 999999], {"_": "UpdateDeleteMessages", "messages": [7001, 999999]})
+
+    entries = await evidence.for_chat(7)
+    delete = entries[-1]
+    assert delete.event == EVENT_DELETE
+    payload = json.loads(delete.payload)
+    assert payload["data"]["message_ids"] == [7001]
+    assert payload["data"]["prior_record_hashes"] == {"7001": first["record_hash"]}
+    assert payload["raw"]["messages"] == [7001, 999999]
+
+
+async def test_bulk_deletion_sends_export(db, config, exporter, notifier, evidence):
+    agg = aggregator(config, db, exporter, notifier, evidence, bulk_delete_threshold=5)
+    await seed(db, evidence, 8, 6)
+    await seed(db, evidence, 9, 1)
 
     await agg.add(None, [8001, 8002, 8003])
     await agg.add(None, [8004, 8005, 8006, 9001])
@@ -56,33 +64,30 @@ async def test_bulk_deletion_sends_export(db, config):
     assert "был удалён/очищен" in caption and "chat8" in caption
     with zipfile.ZipFile(path) as archive:
         assert archive.read("chat.html").decode().count("msg ") == 6
+        assert "manifest.json" in archive.namelist()
     assert len(notifier.texts) == 1 and "chat9" in notifier.texts[0]
 
 
-async def test_own_deletions_are_silent_by_default(db, config):
-    notifier = FakeNotifier()
-    agg = DeletionAggregator(config, db, Exporter(db, config), notifier)
-    await seed(db, 4, 1, outgoing=True)
+async def test_own_deletions_are_silent_by_default(db, config, exporter, notifier, evidence):
+    agg = aggregator(config, db, exporter, notifier, evidence)
+    await seed(db, evidence, 4, 1, outgoing=True)
 
     await agg.add(None, [4001])
     await agg.flush()
 
-    assert notifier.texts == [] and notifier.files == []
+    assert notifier.texts == [] and notifier.files == [] and notifier.media == []
     assert (await db.get_message(4, 4001))["deleted"] == 1
 
 
-async def test_media_sent_with_deleted_message(db, config):
-    notifier = FakeNotifier()
-    agg = DeletionAggregator(config, db, Exporter(db, config), notifier)
+async def test_media_sent_with_deleted_message(db, config, exporter, notifier, evidence, vault):
+    agg = aggregator(config, db, exporter, notifier, evidence)
     await db.upsert_chat(3, "c", "private", None)
-    photo = config.media_dir / "3" / "1_1.jpg"
-    photo.parent.mkdir(parents=True)
-    photo.write_bytes(b"jpg")
+    rel, digest, size = vault.write("media/3/1_1.jpg", b"jpg")
     await db.save_message(MessageRecord(3, 1, "2026-10-01T09:00:00+00:00", sender_id=3, text="смотри",
-                                        media_type="photo", media_uid="photo:1", media_path="media/3/1_1.jpg"))
+                                        media_type="photo", media_uid="photo:1", media_path=rel))
 
     await agg.add(None, [1])
     await agg.flush()
 
-    assert notifier.files and notifier.files[0][0] == photo
-    assert "смотри" in notifier.files[0][1]
+    assert notifier.media and notifier.media[0][0] == rel
+    assert "смотри" in notifier.media[0][1] and notifier.media[0][2] == "photo"

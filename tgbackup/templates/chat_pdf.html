@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+@page {
+  size: A4;
+  margin: 16mm 13mm 20mm 13mm;
+  @top-left { content: "{{ title | css }} · id {{ chat_id }}{% if total > 1 %} · часть {{ part }}/{{ total }}{% endif %}"; font-size: 7.5pt; color: #666; }
+  @top-right { content: "tgbackup {{ version }} · {{ generated_utc }}"; font-size: 7.5pt; color: #666; }
+  @bottom-left { content: "SHA-256 записей: {{ records_digest }}"; font-size: 6.5pt; color: #444; font-family: "DejaVu Sans Mono", monospace; }
+  @bottom-right { content: "стр. " counter(page) " из " counter(pages); font-size: 8pt; color: #444; }
+}
+* { box-sizing: border-box; }
+body { font-family: "DejaVu Sans", "Noto Sans", Arial, sans-serif; font-size: 9pt; color: #111; line-height: 1.35; }
+h1 { font-size: 15pt; margin: 0 0 2mm; }
+h2 { font-size: 11pt; margin: 5mm 0 2mm; border-bottom: 0.4pt solid #999; padding-bottom: 1mm; }
+table.info { border-collapse: collapse; width: 100%; margin-bottom: 2mm; }
+table.info th { text-align: left; width: 38mm; color: #555; font-weight: normal; vertical-align: top; padding: 0.6mm 2mm 0.6mm 0; }
+table.info td { padding: 0.6mm 0; vertical-align: top; word-break: break-word; }
+code, .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 7.5pt; word-break: break-all; }
+.day { text-align: center; font-weight: bold; margin: 4mm 0 2mm; color: #333; page-break-after: avoid; }
+.msg { border: 0.4pt solid #bbb; border-radius: 2mm; padding: 2mm 3mm; margin: 0 0 2mm; page-break-inside: avoid; }
+.msg.out { background: #f1fbe9; margin-left: 12mm; }
+.msg.in { background: #fafafa; margin-right: 12mm; }
+.msg.service { background: #eef1f5; text-align: center; margin-left: 20mm; margin-right: 20mm; }
+.msg.deleted { border: 1pt dashed #d33; background: #fff3f3; }
+.head { font-size: 8pt; color: #333; margin-bottom: 1mm; }
+.head b { color: #000; }
+.time { font-size: 7.5pt; color: #555; }
+.flag-del { color: #c00; font-weight: bold; }
+.flag-edit { color: #a66d00; font-weight: bold; }
+.text { white-space: pre-wrap; word-break: break-word; }
+.reply { border-left: 1.2pt solid #4091de; padding-left: 2mm; color: #444; font-size: 8pt; margin-bottom: 1mm; }
+.fwd { color: #2a6db0; font-size: 8pt; margin-bottom: 1mm; }
+.media { color: #444; font-size: 8pt; margin: 1mm 0; }
+.media img { max-width: 70mm; max-height: 70mm; display: block; margin: 1mm 0; }
+.edits { font-size: 8pt; margin-top: 1.5mm; border-top: 0.3pt dotted #999; padding-top: 1mm; }
+.edits .old { white-space: pre-wrap; color: #444; }
+.hash { font-size: 6.5pt; color: #777; margin-top: 1mm; font-family: "DejaVu Sans Mono", monospace; word-break: break-all; }
+ul.hist { margin: 0; padding-left: 4mm; }
+</style>
+</head>
+<body>
+<h1>{{ title }}</h1>
+<table class="info">
+  <tr><th>Чат</th><td>id <code>{{ chat_id }}</code> · тип {{ chat_type }}{% if username %} · @{{ username }}{% endif %}</td></tr>
+  <tr><th>Экспорт</th><td>{{ generated }} ({{ generated_utc }}), часовой пояс {{ timezone }}{% if total > 1 %}, часть {{ part }} из {{ total }}{% endif %}</td></tr>
+  <tr><th>Сообщений</th><td>{{ stats.messages }} (изменено {{ stats.edited }}, удалено {{ stats.deleted }}, медиа {{ stats.media }})</td></tr>
+  {% if period %}<tr><th>Период</th><td>{{ period[0] }} — {{ period[1] }}</td></tr>{% endif %}
+  <tr><th>SHA-256 записей</th><td><code>{{ records_digest }}</code></td></tr>
+  <tr><th>Голова цепочки</th><td>seq {{ head_seq }} · <code>{{ head_hash }}</code></td></tr>
+  <tr><th>Ключ подписи</th><td>Ed25519 · <code>{{ fingerprint }}</code></td></tr>
+  {% if anchors %}
+  <tr><th>Метки времени</th><td>
+    {% for a in anchors %}seq {{ a.seq }}: RFC 3161 {{ a.tsa_time or '—' }}; OpenTimestamps {{ a.ots_status or '—' }}{% if a.ots_block %} (блок {{ a.ots_block }}){% endif %}<br>{% endfor %}
+  </td></tr>
+  {% endif %}
+</table>
+
+{% if interlocutor %}
+<h2>Собеседник</h2>
+<table class="info">
+  <tr><th>User ID</th><td><code>{{ interlocutor.user_id }}</code></td></tr>
+  <tr><th>Имя</th><td>{{ interlocutor.name or '—' }}</td></tr>
+  <tr><th>Username</th><td>{% if interlocutor.username %}@{{ interlocutor.username }}{% else %}—{% endif %}</td></tr>
+  <tr><th>Телефон</th><td>{{ interlocutor.phone or 'скрыт настройками приватности' }}</td></tr>
+  {% if interlocutor.bio %}<tr><th>О себе</th><td>{{ interlocutor.bio }}</td></tr>{% endif %}
+  <tr><th>Все известные имена</th><td>{{ interlocutor.known_names | join('; ') or '—' }}</td></tr>
+  <tr><th>Все username</th><td>{% for u in interlocutor.known_usernames %}@{{ u }}{{ '; ' if not loop.last }}{% else %}—{% endfor %}</td></tr>
+  {% if interlocutor.known_phones %}<tr><th>Телефоны</th><td>{{ interlocutor.known_phones | join('; ') }}</td></tr>{% endif %}
+  {% if interlocutor.is_bot %}<tr><th>Тип</th><td>бот</td></tr>{% endif %}
+</table>
+{% if interlocutor.history %}
+<ul class="hist">
+  {% for h in interlocutor.history %}
+  <li>{{ h.at }} ({{ h.at_utc }}, {{ h.source }}): {% for field, old, new in h.changes %}{{ field }}: {{ old or '—' }} → {{ new or '—' }}{{ '; ' if not loop.last }}{% endfor %}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% endif %}
+
+<h2>Сообщения</h2>
+{% for m in messages %}
+  {% if m.new_day %}<div class="day">{{ m.day }}</div>{% endif %}
+  <div class="msg {{ 'service' if m.service else ('out' if m.outgoing else 'in') }}{{ ' deleted' if m.deleted_at }}">
+    <div class="head">
+      <b>#{{ m.message_id }}</b> · <b>{{ 'Я' if m.outgoing else m.sender }}</b>{% if m.sender_id %} (id {{ m.sender_id }}){% endif %}<br>
+      <span class="time">{{ m.utc_time }} · {{ m.full_time }} ({{ timezone }})</span>
+      {% if m.edited_at %}<br><span class="flag-edit">изменено {{ m.edited_at_utc }} · {{ m.edited_at }}</span>{% endif %}
+      {% if m.deleted_at %}<br><span class="flag-del">удалено {{ m.deleted_at_utc }} · {{ m.deleted_at }}</span>{% endif %}
+    </div>
+    {% if m.fwd %}<div class="fwd">↪ Переслано от {{ m.fwd }}</div>{% endif %}
+    {% if m.reply %}<div class="reply">в ответ на {% if m.reply.sender %}{{ m.reply.sender }}: {% endif %}{{ m.reply.text }}</div>{% endif %}
+    {% if m.service %}<div class="text">{{ m.service }}</div>{% endif %}
+    {% if m.media %}
+    <div class="media">
+      [{{ m.media.label }}{% if m.media.size_label %}, {{ m.media.size_label }}{% endif %}{% if m.media.name %}, {{ m.media.name }}{% endif %}]
+      {% if m.media.pdf_image %}<img src="{{ m.media.href }}">{% endif %}
+      {% if m.media.note %}<br><i>{{ m.media.note }}</i>{% endif %}
+      {% if m.media.sha256 %}<div class="hash">файл sha256 {{ m.media.sha256 }}</div>{% endif %}
+    </div>
+    {% endif %}
+    {% if m.text %}<div class="text">{{ m.text }}</div>{% endif %}
+    {% if m.reactions %}<div class="media">Реакции: {{ m.reactions }}</div>{% endif %}
+    {% if m.edits %}
+    <div class="edits">
+      История изменений:
+      {% for e in m.edits %}<div>до {{ e.at_utc }} ({{ e.at }}):<div class="old">{{ e.text or '—' }}</div></div>{% endfor %}
+    </div>
+    {% endif %}
+    {% if m.record_hash %}<div class="hash">запись seq {{ m.first_seq }} · sha256 {{ m.record_hash }}</div>{% endif %}
+  </div>
+{% endfor %}
+</body>
+</html>

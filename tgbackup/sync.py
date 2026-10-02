@@ -68,7 +68,7 @@ async def sync_chat(
             ):
                 offset_id = message.id
                 try:
-                    if await tracker.store(message, chat=entity, with_media=with_media):
+                    if await tracker.store(message, chat=entity, with_media=with_media, source="sync"):
                         stored += 1
                 except Exception:
                     log.exception("Sync: failed to store %s/%s", utils.get_peer_id(entity), message.id)

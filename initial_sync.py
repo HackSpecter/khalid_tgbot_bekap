@@ -4,10 +4,10 @@ import logging
 import sys
 
 from tgbackup.config import ConfigError, load_config, setup_logging
-from tgbackup.db import Database
 from tgbackup.handlers import Tracker
-from tgbackup.main import create_user_client
+from tgbackup.main import create_user_client, open_storage
 from tgbackup.media import MediaDownloader
+from tgbackup.profiles import ProfileTracker
 from tgbackup.sync import sync_history
 
 log = logging.getLogger("initial_sync")
@@ -31,10 +31,13 @@ async def run(args: argparse.Namespace) -> None:
     if not await client.is_user_authorized():
         sys.exit("Сессия не авторизована: сначала выполните python login.py")
 
-    async with Database(config.db_path) as db:
-        downloader = MediaDownloader(client, config.media_dir, config.media_max_bytes)
-        tracker = Tracker(config, db, downloader)
-        tracker.me_id = (await client.get_me()).id
+    storage = await open_storage(config)
+    try:
+        downloader = MediaDownloader(client, storage.vault, config.media_max_bytes)
+        profiles = ProfileTracker(config, storage.db, storage.evidence, downloader, None, client)
+        tracker = Tracker(config, storage.db, downloader, storage.evidence, profiles=profiles)
+        tracker.client = client
+        tracker.me_id = profiles.me_id = (await client.get_me()).id
 
         async def progress(text: str) -> None:
             log.info(text)
@@ -49,6 +52,8 @@ async def run(args: argparse.Namespace) -> None:
             chat_pause=args.chat_pause,
             progress=progress,
         )
+    finally:
+        await storage.close()
     await client.disconnect()
     log.info("Готово: чатов %s, сообщений %s, ошибок %s", result.chats, result.messages, result.failed)
 

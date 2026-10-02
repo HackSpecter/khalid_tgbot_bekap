@@ -65,6 +65,19 @@ class Config:
     export_part_size_mb: int = 49
     timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo("UTC"))
     log_level: str = "INFO"
+    encryption_key: str | None = None
+    allow_unencrypted: bool = False
+    tsa_url: str = "https://freetsa.org/tsr"
+    tsa_cert_urls: tuple[str, ...] = ("https://freetsa.org/files/cacert.pem", "https://freetsa.org/files/tsa.crt")
+    tsa_enabled: bool = True
+    ots_enabled: bool = True
+    anchor_hour: int = 3
+    ots_upgrade_hours: int = 6
+    export_pdf: bool = True
+    profile_tracking: bool = True
+    profile_active_days: int = 30
+    profile_sweep_hour: int = 4
+    profile_sweep_pause: float = 3.0
 
     @property
     def session_path(self) -> Path:
@@ -91,6 +104,18 @@ class Config:
         return self.data_dir / "logs"
 
     @property
+    def keys_dir(self) -> Path:
+        return self.data_dir / "keys"
+
+    @property
+    def anchors_dir(self) -> Path:
+        return self.data_dir / "anchors"
+
+    @property
+    def tmp_dir(self) -> Path:
+        return self.data_dir / "tmp"
+
+    @property
     def media_max_bytes(self) -> int:
         return self.media_max_size_mb * 1024 * 1024
 
@@ -106,7 +131,15 @@ class Config:
         return int(head) if head.isdigit() else None
 
     def ensure_dirs(self) -> None:
-        for path in (self.data_dir, self.media_dir, self.exports_dir, self.logs_dir):
+        for path in (
+            self.data_dir,
+            self.media_dir,
+            self.exports_dir,
+            self.logs_dir,
+            self.keys_dir,
+            self.anchors_dir,
+            self.tmp_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
 
 
@@ -147,6 +180,18 @@ def load_config(env_file: str | os.PathLike | None = None) -> Config:
         export_part_size_mb=max(1, _int("EXPORT_PART_SIZE_MB", 49)),
         timezone=tz,
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
+        encryption_key=os.getenv("ENCRYPTION_KEY", "").strip() or None,
+        allow_unencrypted=_bool("ALLOW_UNENCRYPTED", False),
+        tsa_url=os.getenv("TSA_URL", "https://freetsa.org/tsr").strip(),
+        tsa_enabled=_bool("TSA_ENABLED", True),
+        ots_enabled=_bool("OTS_ENABLED", True),
+        anchor_hour=_int("ANCHOR_HOUR", 3) % 24,
+        ots_upgrade_hours=max(1, _int("OTS_UPGRADE_HOURS", 6)),
+        export_pdf=_bool("EXPORT_PDF", True),
+        profile_tracking=_bool("PROFILE_TRACKING", True),
+        profile_active_days=max(1, _int("PROFILE_ACTIVE_DAYS", 30)),
+        profile_sweep_hour=_int("PROFILE_SWEEP_HOUR", 4) % 24,
+        profile_sweep_pause=float(os.getenv("PROFILE_SWEEP_PAUSE", "3") or 3),
     )
 
 

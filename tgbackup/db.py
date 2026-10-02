@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import os
+import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,70 +10,12 @@ from typing import Any, Iterable, Sequence
 
 import aiosqlite
 
+from .migrations import migrate
+
+log = logging.getLogger(__name__)
+
 CHANNEL_ID_BOUNDARY = -1_000_000_000_000
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS chats (
-    id          INTEGER PRIMARY KEY,
-    title       TEXT,
-    type        TEXT NOT NULL,
-    username    TEXT,
-    updated_at  TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS users (
-    id          INTEGER PRIMARY KEY,
-    first_name  TEXT,
-    last_name   TEXT,
-    username    TEXT,
-    phone       TEXT,
-    is_bot      INTEGER NOT NULL DEFAULT 0,
-    updated_at  TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS messages (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id         INTEGER NOT NULL,
-    message_id      INTEGER NOT NULL,
-    sender_id       INTEGER,
-    sender_name     TEXT,
-    sender_username TEXT,
-    outgoing        INTEGER NOT NULL DEFAULT 0,
-    text            TEXT,
-    date            TEXT NOT NULL,
-    reply_to        INTEGER,
-    grouped_id      INTEGER,
-    media_type      TEXT,
-    media_uid       TEXT,
-    media_path      TEXT,
-    media_size      INTEGER,
-    media_note      TEXT,
-    edited          INTEGER NOT NULL DEFAULT 0,
-    edit_date       TEXT,
-    deleted         INTEGER NOT NULL DEFAULT 0,
-    deleted_at      TEXT,
-    saved_at        TEXT NOT NULL,
-    UNIQUE (chat_id, message_id)
-);
-
-CREATE INDEX IF NOT EXISTS ix_messages_message_id ON messages (message_id);
-CREATE INDEX IF NOT EXISTS ix_messages_chat_date ON messages (chat_id, date);
-CREATE INDEX IF NOT EXISTS ix_messages_deleted ON messages (chat_id, deleted);
-
-CREATE TABLE IF NOT EXISTS edits (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id         INTEGER NOT NULL,
-    message_id      INTEGER NOT NULL,
-    old_text        TEXT,
-    new_text        TEXT,
-    old_media_type  TEXT,
-    old_media_path  TEXT,
-    edited_at       TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS ix_edits_message ON edits (chat_id, message_id);
-"""
-
+PLAINTEXT_HEADER = b"SQLite format 3\x00"
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -115,6 +60,11 @@ class MessageRecord:
     media_note: str | None = None
     edited: bool = False
     edit_date: str | None = None
+    fwd_from_id: int | None = None
+    fwd_from_name: str | None = None
+    fwd_date: str | None = None
+    reactions: str | None = None
+    service_action: str | None = None
 
 
 @dataclass(frozen=True)
@@ -126,12 +76,63 @@ class Stats:
     deleted: int
     edits: int
     db_bytes: int
+    evidence: int = 0
+    profiles: int = 0
+    anchors: int = 0
+    encrypted: bool = False
+
+
+def _cipher_driver():
+    try:
+        import sqlcipher3
+    except ImportError as exc:
+        raise RuntimeError("ENCRYPTION_KEY is set but sqlcipher3 is not installed") from exc
+    return sqlcipher3
+
+
+def is_plaintext_db(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    with open(path, "rb") as fh:
+        return fh.read(16) == PLAINTEXT_HEADER
+
+
+def encrypt_plaintext_db(path: Path, key_hex: str) -> None:
+    driver = _cipher_driver()
+    tmp = path.with_name(path.name + ".encrypting")
+    if tmp.exists():
+        tmp.unlink()
+    plain = driver.connect(str(path))
+    try:
+        plain.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        plain.execute(f"ATTACH DATABASE '{tmp}' AS encrypted KEY \"x'{key_hex}'\"")
+        plain.execute("SELECT sqlcipher_export('encrypted')")
+        version = plain.execute("PRAGMA user_version").fetchone()[0]
+        plain.execute(f"PRAGMA encrypted.user_version = {int(version)}")
+        plain.execute("DETACH DATABASE encrypted")
+    finally:
+        plain.close()
+    backup = path.with_name(path.name + ".plaintext-backup")
+    os.replace(path, backup)
+    for suffix in ("-wal", "-shm"):
+        leftover = Path(f"{path}{suffix}")
+        if leftover.exists():
+            leftover.unlink()
+    os.replace(tmp, path)
+    os.chmod(path, 0o600)
+    backup.unlink()
+    log.warning("Database %s converted to SQLCipher", path)
 
 
 class Database:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, key_hex: str | None = None) -> None:
         self.path = Path(path)
+        self.key_hex = key_hex
         self._conn: aiosqlite.Connection | None = None
+
+    @property
+    def encrypted(self) -> bool:
+        return self.key_hex is not None
 
     @property
     def conn(self) -> aiosqlite.Connection:
@@ -139,16 +140,36 @@ class Database:
             raise RuntimeError("Database is not connected")
         return self._conn
 
+    def _connector(self):
+        if self.key_hex is None:
+            return sqlite3, lambda: sqlite3.connect(self.path)
+        driver = _cipher_driver()
+        key_hex = self.key_hex
+
+        def connect():
+            conn = driver.connect(str(self.path))
+            conn.execute(f"PRAGMA key = \"x'{key_hex}'\"")
+            conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            return conn
+
+        return driver, connect
+
     async def connect(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = await aiosqlite.connect(self.path)
-        self._conn.row_factory = aiosqlite.Row
+        if self.key_hex is not None and is_plaintext_db(self.path):
+            encrypt_plaintext_db(self.path, self.key_hex)
+        driver, connector = self._connector()
+        self._conn = aiosqlite.Connection(connector, 64)
+        await self._conn
+        self._conn.row_factory = driver.Row
         await self._conn.execute("PRAGMA journal_mode=WAL")
-        await self._conn.execute("PRAGMA synchronous=NORMAL")
+        await self._conn.execute("PRAGMA synchronous=FULL")
         await self._conn.execute("PRAGMA busy_timeout=10000")
+        await self._conn.execute("PRAGMA foreign_keys=ON")
         await self._conn.create_function("pylower", 1, _lower, deterministic=True)
-        await self._conn.executescript(SCHEMA)
-        await self._conn.commit()
+        await migrate(self._conn)
+        if self.path.exists():
+            os.chmod(self.path, 0o600)
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -224,19 +245,45 @@ class Database:
                 media_size = COALESCE(excluded.media_size, messages.media_size),
                 media_note = excluded.media_note,
                 edited = MAX(messages.edited, excluded.edited),
-                edit_date = COALESCE(excluded.edit_date, messages.edit_date)
+                edit_date = COALESCE(excluded.edit_date, messages.edit_date),
+                fwd_from_id = excluded.fwd_from_id,
+                fwd_from_name = COALESCE(excluded.fwd_from_name, messages.fwd_from_name),
+                fwd_date = excluded.fwd_date,
+                reactions = COALESCE(excluded.reactions, messages.reactions),
+                service_action = excluded.service_action
             """,
             data,
         )
         await self.conn.commit()
 
     async def set_media(
-        self, chat_id: int, message_id: int, path: str | None, size: int | None, note: str | None
+        self,
+        chat_id: int,
+        message_id: int,
+        path: str | None,
+        size: int | None,
+        note: str | None,
+        sha256: str | None = None,
     ) -> None:
         await self.conn.execute(
-            "UPDATE messages SET media_path = ?, media_size = COALESCE(?, media_size), media_note = ? "
-            "WHERE chat_id = ? AND message_id = ?",
-            (path, size, note, chat_id, message_id),
+            "UPDATE messages SET media_path = ?, media_size = COALESCE(?, media_size), media_note = ?, "
+            "media_sha256 = ? WHERE chat_id = ? AND message_id = ?",
+            (path, size, note, sha256, chat_id, message_id),
+        )
+        await self.conn.commit()
+
+    async def link_evidence(self, chat_id: int, message_id: int, seq: int, record_hash: str) -> None:
+        await self.conn.execute(
+            "UPDATE messages SET first_seq = ?, record_hash = ? "
+            "WHERE chat_id = ? AND message_id = ? AND first_seq IS NULL",
+            (seq, record_hash, chat_id, message_id),
+        )
+        await self.conn.commit()
+
+    async def set_reactions(self, chat_id: int, message_id: int, reactions: str | None) -> None:
+        await self.conn.execute(
+            "UPDATE messages SET reactions = ? WHERE chat_id = ? AND message_id = ?",
+            (reactions, chat_id, message_id),
         )
         await self.conn.commit()
 
@@ -246,11 +293,12 @@ class Database:
         ) as cur:
             return await cur.fetchone()
 
-    async def record_edit(self, old: aiosqlite.Row, new: MessageRecord) -> None:
+    async def record_edit(self, old: aiosqlite.Row, new: MessageRecord, evidence_seq: int | None = None) -> None:
         await self.conn.execute(
             """
-            INSERT INTO edits (chat_id, message_id, old_text, new_text, old_media_type, old_media_path, edited_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO edits (chat_id, message_id, old_text, new_text, old_media_type, old_media_path,
+                               old_media_sha256, evidence_seq, edited_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 old["chat_id"],
@@ -259,6 +307,8 @@ class Database:
                 new.text,
                 old["media_type"],
                 old["media_path"],
+                old["media_sha256"],
+                evidence_seq,
                 new.edit_date or utcnow(),
             ),
         )
@@ -367,21 +417,97 @@ class Database:
         ) as cur:
             return list(await cur.fetchall())
 
-    async def stats(self) -> Stats:
-        async def scalar(sql: str) -> int:
-            async with self.conn.execute(sql) as cur:
-                row = await cur.fetchone()
-                return int(row[0] or 0)
+    async def scalar(self, sql: str, params: Sequence[Any] = ()) -> int:
+        async with self.conn.execute(sql, params) as cur:
+            row = await cur.fetchone()
+            return int(row[0] or 0) if row else 0
 
+    async def stats(self) -> Stats:
         db_bytes = sum(
             p.stat().st_size for p in (self.path, Path(f"{self.path}-wal"), Path(f"{self.path}-shm")) if p.exists()
         )
         return Stats(
-            messages=await scalar("SELECT COUNT(*) FROM messages"),
-            chats=await scalar("SELECT COUNT(*) FROM chats"),
-            users=await scalar("SELECT COUNT(*) FROM users"),
-            media_files=await scalar("SELECT COUNT(*) FROM messages WHERE media_path IS NOT NULL"),
-            deleted=await scalar("SELECT COUNT(*) FROM messages WHERE deleted = 1"),
-            edits=await scalar("SELECT COUNT(*) FROM edits"),
+            messages=await self.scalar("SELECT COUNT(*) FROM messages"),
+            chats=await self.scalar("SELECT COUNT(*) FROM chats"),
+            users=await self.scalar("SELECT COUNT(*) FROM users"),
+            media_files=await self.scalar("SELECT COUNT(*) FROM messages WHERE media_path IS NOT NULL"),
+            deleted=await self.scalar("SELECT COUNT(*) FROM messages WHERE deleted = 1"),
+            edits=await self.scalar("SELECT COUNT(*) FROM edits"),
             db_bytes=db_bytes,
+            evidence=await self.scalar("SELECT COUNT(*) FROM evidence_log"),
+            profiles=await self.scalar("SELECT COUNT(*) FROM profile_history"),
+            anchors=await self.scalar("SELECT COUNT(*) FROM anchors"),
+            encrypted=self.encrypted,
         )
+
+    async def kv_get(self, key: str) -> str | None:
+        async with self.conn.execute("SELECT value FROM kv WHERE key = ?", (key,)) as cur:
+            row = await cur.fetchone()
+        return row["value"] if row else None
+
+    async def kv_set(self, key: str, value: str | None) -> None:
+        await self.conn.execute(
+            "INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (key, value, utcnow()),
+        )
+        await self.conn.commit()
+
+    async def last_profile(self, user_id: int) -> aiosqlite.Row | None:
+        async with self.conn.execute(
+            "SELECT * FROM profile_history WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,)
+        ) as cur:
+            return await cur.fetchone()
+
+    async def profile_history(self, user_id: int) -> list[aiosqlite.Row]:
+        async with self.conn.execute(
+            "SELECT * FROM profile_history WHERE user_id = ? ORDER BY id", (user_id,)
+        ) as cur:
+            return list(await cur.fetchall())
+
+    async def add_profile_snapshot(self, snapshot: dict) -> None:
+        columns = ", ".join(snapshot)
+        placeholders = ", ".join(f":{key}" for key in snapshot)
+        await self.conn.execute(f"INSERT INTO profile_history ({columns}) VALUES ({placeholders})", snapshot)
+        await self.conn.execute(
+            "UPDATE users SET bio = COALESCE(?, bio), photo_id = ? WHERE id = ?",
+            (snapshot.get("bio"), snapshot.get("photo_id"), snapshot["user_id"]),
+        )
+        await self.conn.commit()
+
+    async def active_private_users(self, since_iso: str) -> list[int]:
+        async with self.conn.execute(
+            """
+            SELECT DISTINCT m.chat_id FROM messages m
+            JOIN chats c ON c.id = m.chat_id AND c.type = 'private'
+            WHERE m.chat_id > 0 AND m.date >= ?
+            """,
+            (since_iso,),
+        ) as cur:
+            return [row[0] for row in await cur.fetchall()]
+
+    async def add_anchor(self, anchor: dict) -> int:
+        columns = ", ".join(anchor)
+        placeholders = ", ".join(f":{key}" for key in anchor)
+        cur = await self.conn.execute(f"INSERT INTO anchors ({columns}) VALUES ({placeholders})", anchor)
+        await self.conn.commit()
+        return cur.lastrowid
+
+    async def update_anchor(self, anchor_id: int, **fields: Any) -> None:
+        assignments = ", ".join(f"{key} = :{key}" for key in fields)
+        await self.conn.execute(f"UPDATE anchors SET {assignments} WHERE id = :id", {**fields, "id": anchor_id})
+        await self.conn.commit()
+
+    async def anchors(self) -> list[aiosqlite.Row]:
+        async with self.conn.execute("SELECT * FROM anchors ORDER BY id") as cur:
+            return list(await cur.fetchall())
+
+    async def last_anchor(self) -> aiosqlite.Row | None:
+        async with self.conn.execute("SELECT * FROM anchors ORDER BY id DESC LIMIT 1") as cur:
+            return await cur.fetchone()
+
+    async def messages_without_evidence(self, limit: int = 1000) -> list[aiosqlite.Row]:
+        async with self.conn.execute(
+            "SELECT * FROM messages WHERE first_seq IS NULL ORDER BY id LIMIT ?", (limit,)
+        ) as cur:
+            return list(await cur.fetchall())

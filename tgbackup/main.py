@@ -6,18 +6,24 @@ import logging
 import os
 import signal
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from telethon import TelegramClient
 
+from .anchoring import Anchorer
 from .commands import Commands
 from .config import Config, ConfigError, load_config, setup_logging
+from .crypto import KeyRing, Signer, Vault
 from .db import Database
 from .deletions import DeletionAggregator
+from .evidence import EvidenceLog
 from .exporter import Exporter
 from .handlers import Tracker
+from .maintenance import run_maintenance
 from .media import MediaDownloader
 from .notifier import Notifier
+from .profiles import ProfileTracker
 
 log = logging.getLogger("tgbackup")
 
@@ -36,6 +42,34 @@ def create_user_client(config: Config, *, catch_up: bool = False) -> TelegramCli
         flood_sleep_threshold=120,
         request_retries=5,
     )
+
+
+@dataclass
+class Storage:
+    db: Database
+    keyring: KeyRing
+    vault: Vault
+    evidence: EvidenceLog
+    signer: Signer
+
+    async def close(self) -> None:
+        await self.db.close()
+
+
+async def open_storage(config: Config, *, maintenance: bool = True) -> Storage:
+    os.umask(0o077)
+    config.ensure_dirs()
+    keyring = KeyRing.from_secret(config.encryption_key)
+    if not keyring.enabled:
+        log.warning("ENCRYPTION_KEY is not set: database and media are stored UNENCRYPTED")
+    db = Database(config.db_path, keyring.db_key_hex)
+    await db.connect()
+    vault = Vault(config.data_dir, keyring)
+    evidence = EvidenceLog(db)
+    signer = Signer.load_or_create(config.keys_dir, keyring)
+    if maintenance:
+        await run_maintenance(db, evidence, vault)
+    return Storage(db, keyring, vault, evidence, signer)
 
 
 def secure_sessions(config: Config) -> None:
@@ -69,11 +103,11 @@ async def keep_connected(client: TelegramClient, name: str, stop: asyncio.Event)
 
 
 async def run(config: Config) -> int:
-    os.umask(0o077)
-    config.ensure_dirs()
-
-    db = Database(config.db_path)
-    await db.connect()
+    if not config.encryption_key and not config.allow_unencrypted:
+        log.error("ENCRYPTION_KEY is required (or set ALLOW_UNENCRYPTED=true explicitly)")
+        return 1
+    storage = await open_storage(config)
+    db = storage.db
     client = create_user_client(config, catch_up=True)
 
     bot: TelegramClient | None = None
@@ -87,25 +121,33 @@ async def run(config: Config) -> int:
             auto_reconnect=True,
             flood_sleep_threshold=300,
         )
-        notifier = Notifier(bot, config.owner_id)
+        notifier = Notifier(bot, config.owner_id, storage.vault)
     else:
-        notifier = Notifier(client, "me")
+        notifier = Notifier(client, "me", storage.vault)
 
-    exporter = Exporter(db, config)
-    deletions = DeletionAggregator(config, db, exporter, notifier)
-    downloader = MediaDownloader(client, config.media_dir, config.media_max_bytes)
-    tracker = Tracker(config, db, downloader, notifier, deletions)
+    exporter = Exporter(db, config, storage.vault, storage.evidence, storage.signer)
+    deletions = DeletionAggregator(config, db, exporter, notifier, storage.evidence)
+    downloader = MediaDownloader(client, storage.vault, config.media_max_bytes)
+    profiles = (
+        ProfileTracker(config, db, storage.evidence, downloader, notifier, client)
+        if config.profile_tracking
+        else None
+    )
+    tracker = Tracker(config, db, downloader, storage.evidence, notifier, deletions, profiles)
     tracker.register(client)
-    commands = Commands(config, db, exporter, notifier, client, tracker)
+    anchorer = Anchorer(config, db, storage.evidence)
+    commands = Commands(config, db, exporter, notifier, client, tracker, anchorer)
 
     await client.connect()
     if not await client.is_user_authorized():
         log.error("Session is not authorized. Run `python login.py` interactively first.")
         await client.disconnect()
-        await db.close()
+        await storage.close()
         return 2
     me = await client.get_me()
     tracker.me_id = me.id
+    if profiles is not None:
+        profiles.me_id = me.id
     log.info("Logged in as %s (%s)", me.username or me.first_name, me.id)
 
     if bot is not None:
@@ -125,7 +167,12 @@ async def run(config: Config) -> int:
     log.info("Backup is running (notifications via %s)", "bot" if bot else "Saved Messages")
     await notifier.send_text("✅ Бэкап переписок запущен")
 
-    watchers = [asyncio.create_task(keep_connected(client, "userbot", stop))]
+    watchers = [
+        asyncio.create_task(keep_connected(client, "userbot", stop)),
+        asyncio.create_task(anchorer.run_scheduler(stop)),
+    ]
+    if profiles is not None:
+        watchers.append(asyncio.create_task(profiles.run_scheduler(stop)))
     if bot is not None:
         watchers.append(asyncio.create_task(keep_connected(bot, "notifier", stop)))
 
@@ -141,7 +188,7 @@ async def run(config: Config) -> int:
             if tg is not None:
                 with contextlib.suppress(Exception):
                     await tg.disconnect()
-        await db.close()
+        await storage.close()
     return 0
 
 

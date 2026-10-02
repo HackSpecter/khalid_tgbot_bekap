@@ -3,16 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 
 from telethon import TelegramClient
 from telethon.tl import types
 from telethon.tl.custom import Message
 
+from .crypto import Vault
+
 log = logging.getLogger(__name__)
-
-DOWNLOADABLE = {"photo", "video", "video_note", "voice", "audio", "sticker", "animation", "document"}
-
 
 @dataclass(frozen=True)
 class MediaInfo:
@@ -110,36 +108,57 @@ def describe(message: Message, info: MediaInfo) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class StoredMedia:
+    path: str | None
+    note: str | None
+    sha256: str | None = None
+    size: int | None = None
+
+
 class MediaDownloader:
-    def __init__(self, client: TelegramClient, media_dir: Path, max_bytes: int, concurrency: int = 3) -> None:
+    def __init__(self, client: TelegramClient, vault: Vault, max_bytes: int, concurrency: int = 3) -> None:
         self.client = client
-        self.media_dir = media_dir
-        self.root = media_dir.parent
+        self.vault = vault
         self.max_bytes = max_bytes
         self._semaphore = asyncio.Semaphore(concurrency)
 
-    async def download(self, message: Message, chat_id: int, info: MediaInfo) -> tuple[str | None, str | None]:
+    async def download(self, message: Message, chat_id: int, info: MediaInfo) -> StoredMedia:
         if info.ephemeral:
-            return None, "самоуничтожающееся медиа не сохраняется"
+            return StoredMedia(None, "самоуничтожающееся медиа не сохраняется")
         if not info.downloadable:
-            return None, None
+            return StoredMedia(None, None)
         if info.size is not None and info.size > self.max_bytes:
-            return None, f"файл больше лимита ({info.size / 1024 / 1024:.1f} МБ), сохранены только метаданные"
+            return StoredMedia(
+                None, f"файл больше лимита ({info.size / 1024 / 1024:.1f} МБ), сохранены только метаданные"
+            )
 
-        target_dir = self.media_dir / str(chat_id)
-        target_dir.mkdir(parents=True, exist_ok=True)
         ext = (message.file.ext if message.file else None) or ""
         if info.type == "sticker" and not ext:
             ext = ".webp"
         suffix = info.uid.rsplit(":", 1)[-1] if info.uid else "media"
-        target = target_dir / f"{message.id}_{suffix}{ext}"
+        rel = f"media/{chat_id}/{message.id}_{suffix}{ext}"
 
         async with self._semaphore:
             try:
-                result = await self.client.download_media(message, file=str(target))
+                data = await self.client.download_media(message, file=bytes)
             except Exception:
                 log.exception("Media download failed chat=%s msg=%s", chat_id, message.id)
-                return None, "не удалось скачать медиа"
-        if not result:
-            return None, "не удалось скачать медиа"
-        return Path(result).resolve().relative_to(self.root).as_posix(), None
+                return StoredMedia(None, "не удалось скачать медиа")
+        if not data:
+            return StoredMedia(None, "не удалось скачать медиа")
+        stored, digest, size = await asyncio.to_thread(self.vault.write, rel, data)
+        return StoredMedia(stored, None, digest, size)
+
+    async def download_profile_photo(self, user, photo_id: int) -> StoredMedia:
+        async with self._semaphore:
+            try:
+                data = await self.client.download_profile_photo(user, file=bytes, download_big=True)
+            except Exception:
+                log.exception("Profile photo download failed user=%s", getattr(user, "id", None))
+                return StoredMedia(None, "не удалось скачать фото профиля")
+        if not data:
+            return StoredMedia(None, None)
+        rel = f"media/profiles/{user.id}/{photo_id}.jpg"
+        stored, digest, size = await asyncio.to_thread(self.vault.write, rel, data)
+        return StoredMedia(stored, None, digest, size)

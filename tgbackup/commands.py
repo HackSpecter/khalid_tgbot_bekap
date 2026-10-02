@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from pathlib import Path
 
 from telethon import TelegramClient, events, utils
 
+from .anchoring import Anchorer
 from .config import Config
 from .db import Database
+from .evidence import ChainVerifier
 from .exporter import Exporter
 from .formatting import chat_label, fmt_dt, human_size, media_label, sender_label
 from .handlers import Tracker
@@ -26,6 +29,9 @@ HELP = """<b>Бэкап переписок</b>
 /search &lt;текст&gt; — поиск по сохранённым сообщениям
 /stats — статистика хранилища
 /sync &lt;чат | all&gt; [лимит] — догрузить историю
+/profile &lt;чат&gt; — история профиля собеседника
+/verify — проверить хеш-цепочку
+/anchor — заякорить цепочку прямо сейчас (RFC 3161 + OpenTimestamps)
 /help — эта справка"""
 
 
@@ -48,6 +54,7 @@ class Commands:
         notifier: Notifier,
         user_client: TelegramClient,
         tracker: Tracker,
+        anchorer: Anchorer | None = None,
     ) -> None:
         self.config = config
         self.db = db
@@ -55,6 +62,7 @@ class Commands:
         self.notifier = notifier
         self.user_client = user_client
         self.tracker = tracker
+        self.anchorer = anchorer
         self._sync_task: asyncio.Task | None = None
         self.handlers = {
             "start": self.cmd_help,
@@ -64,6 +72,9 @@ class Commands:
             "stats": self.cmd_stats,
             "search": self.cmd_search,
             "sync": self.cmd_sync,
+            "profile": self.cmd_profile,
+            "verify": self.cmd_verify,
+            "anchor": self.cmd_anchor,
         }
 
     def register_bot(self, bot: TelegramClient, owner_id: int) -> None:
@@ -157,8 +168,18 @@ class Commands:
             f"Удалённых: {stats.deleted}",
             f"Правок: {stats.edits}",
             f"Медиа: {media_files} файлов, {human_size(media_bytes)}",
-            f"База: {human_size(stats.db_bytes)}",
+            f"База: {human_size(stats.db_bytes)} ({'SQLCipher' if stats.encrypted else 'без шифрования!'})",
+            f"Записей в цепочке: {stats.evidence}",
+            f"Снимков профилей: {stats.profiles}",
+            f"Якорей: {stats.anchors}",
         ]
+        last = await self.db.last_anchor()
+        if last is not None:
+            tz = self.config.timezone
+            lines.append(
+                f"Последний якорь: seq {last['seq']}, {fmt_dt(last['created_at'], tz)}, "
+                f"TSA {'✅' if last['tsr_file'] else '❌'}, OTS {esc(last['ots_status'] or '—')}"
+            )
         await self.notifier.send_text("\n".join(lines))
 
     async def cmd_search(self, arg: str) -> None:
@@ -213,4 +234,64 @@ class Commands:
             return
         await self.notifier.send_text(
             f"✅ Синхронизация завершена: чатов {result.chats}, сообщений {result.messages}, ошибок {result.failed}"
+        )
+
+    async def cmd_profile(self, arg: str) -> None:
+        if not arg:
+            await self.notifier.send_text("Использование: /profile &lt;@username | chat_id&gt;")
+            return
+        chat = await self.resolve_chat(arg)
+        if chat is None or chat["type"] != "private":
+            await self.notifier.send_text(f"Личный чат «{esc(arg)}» не найден")
+            return
+        history = await self.db.profile_history(chat["id"])
+        if not history:
+            await self.notifier.send_text("История профиля пока пуста")
+            return
+        tz = self.config.timezone
+        lines = [f"👤 <b>История профиля</b> {esc(chat_label(chat, chat['id']))} (id {chat['id']})", ""]
+        for item in history:
+            changes = json.loads(item["changes"])
+            described = []
+            for field_name, (old, new) in changes.items():
+                if field_name == "photo_id":
+                    described.append("фото: " + ("новое" if new else "удалено/скрыто"))
+                else:
+                    described.append(f"{field_name}: {esc(old or '—')} → {esc(new or '—')}")
+            lines.append(f"<b>{fmt_dt(item['observed_at'], tz)}</b> ({esc(item['source'])})")
+            lines.append("; ".join(described) or "—")
+            lines.append("")
+        await self.notifier.send_text("\n".join(lines))
+
+    async def cmd_verify(self, arg: str) -> None:
+        await self.notifier.send_text("⏳ Проверяю цепочку…")
+        verifier = ChainVerifier()
+        async for entry in self.tracker.evidence.iter_all():
+            verifier.feed(entry)
+        if verifier.issues:
+            shown = "\n".join(f"seq {i.seq}: {esc(i.problem)}" for i in verifier.issues[:20])
+            await self.notifier.send_text(
+                f"❌ Нарушения целостности: {len(verifier.issues)}\n{shown}\n\nПолный отчёт: python verify.py"
+            )
+            return
+        head = verifier.last
+        await self.notifier.send_text(
+            f"✅ Цепочка цела: {verifier.count} записей\n"
+            f"Голова: seq {head.seq if head else 0}\n<code>{head.entry_hash if head else '—'}</code>\n\n"
+            "Полная проверка медиа и меток времени: python verify.py"
+        )
+
+    async def cmd_anchor(self, arg: str) -> None:
+        if self.anchorer is None:
+            await self.notifier.send_text("Заякоривание недоступно")
+            return
+        await self.notifier.send_text("⏳ Заякориваю голову цепочки…")
+        result = await self.anchorer.anchor_now(force=arg.strip().lower() == "force")
+        if result is None:
+            await self.notifier.send_text("Цепочка не менялась с последнего якоря (для повтора: /anchor force)")
+            return
+        await self.notifier.send_text(
+            f"⚓️ Якорь seq {result['seq']}\n<code>{result['entry_hash']}</code>\n"
+            f"RFC 3161: {esc(result.get('tsa_time') or result.get('tsa_error') or 'выключено')}\n"
+            f"OpenTimestamps: {esc(result.get('ots_status') or 'выключено')}"
         )
