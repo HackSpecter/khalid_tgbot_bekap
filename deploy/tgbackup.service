@@ -1,0 +1,24 @@
+[Unit]
+Description=Telegram personal backup userbot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tgbackup
+Group=tgbackup
+WorkingDirectory=/opt/tgbackup
+EnvironmentFile=/opt/tgbackup/.env
+ExecStart=/opt/tgbackup/.venv/bin/python -m tgbackup
+Restart=always
+RestartSec=10
+TimeoutStopSec=40
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/tgbackup/data
+
+[Install]
+WantedBy=multi-user.target

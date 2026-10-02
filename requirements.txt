@@ -1,0 +1,6 @@
+Telethon==1.45.0
+cryptg==0.6.0
+aiosqlite==0.22.1
+Jinja2==3.1.6
+python-dotenv==1.2.4
+tzdata==2026.4

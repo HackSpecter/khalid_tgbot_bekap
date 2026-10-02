@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}{% if total > 1 %} — часть {{ part }}/{{ total }}{% endif %}</title>
+<style>
+:root {
+  --bg: #dfe7d4;
+  --pattern: rgba(110, 140, 90, .08);
+  --header: #ffffff;
+  --header-text: #111;
+  --muted: #7a8b99;
+  --in: #ffffff;
+  --out: #e2ffc7;
+  --text: #0f1419;
+  --meta-in: #9aa5ae;
+  --meta-out: #5fa752;
+  --reply: rgba(64, 145, 222, .1);
+  --reply-bar: #4091de;
+  --day: rgba(40, 60, 40, .35);
+  --deleted: #e5484d;
+  --deleted-bg: rgba(229, 72, 77, .08);
+  --edited: #c48a00;
+  --shadow: 0 1px 1px rgba(0, 0, 0, .12);
+  --link: #2a7ec7;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1621;
+    --pattern: rgba(255, 255, 255, .02);
+    --header: #17212b;
+    --header-text: #f1f4f7;
+    --muted: #708499;
+    --in: #182533;
+    --out: #2b5278;
+    --text: #f1f4f7;
+    --meta-in: #6d7f8f;
+    --meta-out: #7da8d3;
+    --reply: rgba(100, 180, 240, .12);
+    --reply-bar: #64b4f0;
+    --day: rgba(0, 0, 0, .35);
+    --deleted: #ff6b70;
+    --deleted-bg: rgba(255, 107, 112, .12);
+    --edited: #e0b34a;
+    --shadow: 0 1px 1px rgba(0, 0, 0, .3);
+    --link: #6ab3f3;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: var(--text);
+  background-color: var(--bg);
+  background-image: radial-gradient(var(--pattern) 1.5px, transparent 1.5px);
+  background-size: 22px 22px;
+  min-height: 100vh;
+}
+a { color: var(--link); }
+header {
+  position: sticky; top: 0; z-index: 5;
+  background: var(--header); color: var(--header-text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
+  padding: 10px 16px;
+}
+header .wrap { max-width: 820px; margin: 0 auto; display: flex; gap: 12px; align-items: center; }
+.avatar {
+  width: 42px; height: 42px; border-radius: 50%; flex: none;
+  display: grid; place-items: center; color: #fff; font-weight: 600; font-size: 18px;
+  background: linear-gradient(135deg, #6ec9cb, #4091de);
+}
+header h1 { font-size: 16px; margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+header .sub { font-size: 13px; color: var(--muted); }
+.summary {
+  max-width: 820px; margin: 14px auto 0; padding: 0 16px;
+  display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
+}
+.chip { background: var(--day); color: #fff; border-radius: 12px; padding: 3px 10px; font-size: 12.5px; }
+main { max-width: 820px; margin: 0 auto; padding: 8px 16px 40px; }
+.day { text-align: center; margin: 16px 0 8px; position: sticky; top: 70px; z-index: 2; }
+.day span { background: var(--day); color: #fff; border-radius: 12px; padding: 3px 11px; font-size: 13px; font-weight: 500; }
+.row { display: flex; margin: 2px 0; }
+.row.out { justify-content: flex-end; }
+.row.first { margin-top: 8px; }
+.bubble {
+  position: relative; max-width: min(78%, 560px); min-width: 80px;
+  background: var(--in); border-radius: 12px; padding: 6px 10px 6px;
+  box-shadow: var(--shadow); overflow-wrap: anywhere;
+}
+.out .bubble { background: var(--out); }
+.bubble.deleted { outline: 1.5px dashed var(--deleted); background-image: linear-gradient(var(--deleted-bg), var(--deleted-bg)); }
+.bubble:target { box-shadow: 0 0 0 3px var(--reply-bar); }
+.sender { font-weight: 600; font-size: 13.5px; margin-bottom: 2px; }
+.text { white-space: pre-wrap; }
+.reply {
+  display: block; text-decoration: none; color: inherit;
+  border-left: 3px solid var(--reply-bar); background: var(--reply);
+  border-radius: 4px; padding: 3px 8px; margin: 2px 0 5px; font-size: 13.5px;
+}
+.reply b { color: var(--reply-bar); display: block; font-size: 13px; }
+.reply span { opacity: .85; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.media { margin: 2px -4px 4px; }
+.media img, .media video { display: block; max-width: 100%; max-height: 420px; border-radius: 8px; }
+.media.sticker img, .media.sticker video { max-width: 180px; max-height: 180px; background: none; }
+.media.video_note video { width: 220px; height: 220px; object-fit: cover; border-radius: 50%; }
+.media audio { width: 280px; max-width: 100%; }
+.file {
+  display: flex; gap: 10px; align-items: center; text-decoration: none; color: inherit;
+  padding: 4px 4px;
+}
+.file .ico {
+  width: 40px; height: 40px; border-radius: 50%; flex: none; display: grid; place-items: center;
+  background: var(--reply-bar); color: #fff; font-size: 18px;
+}
+.file small { color: var(--muted); display: block; }
+.note { font-size: 13px; color: var(--muted); font-style: italic; }
+.meta {
+  float: right; margin: 6px 0 -4px 10px; font-size: 12px; color: var(--meta-in);
+  white-space: nowrap; user-select: none;
+}
+.out .meta { color: var(--meta-out); }
+.tag-edited { color: var(--edited); }
+.tag-deleted { color: var(--deleted); font-weight: 600; }
+details.history { clear: both; margin-top: 6px; font-size: 13px; }
+details.history summary { cursor: pointer; color: var(--edited); }
+details.history ol { margin: 4px 0 0; padding-left: 18px; }
+details.history li { margin: 3px 0; }
+details.history .old { white-space: pre-wrap; opacity: .85; }
+.clear { clear: both; }
+footer { text-align: center; color: var(--muted); font-size: 12px; padding: 0 16px 24px; }
+@media (max-width: 560px) {
+  .bubble { max-width: 88%; }
+  .day { top: 64px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="avatar">{{ (title[:1] or "?") | upper }}</div>
+    <div>
+      <h1>{{ title }}</h1>
+      <div class="sub">
+        {% if username %}@{{ username }} · {% endif %}id {{ chat_id }}
+        {% if total > 1 %} · часть {{ part }} из {{ total }}{% endif %}
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="summary">
+  <span class="chip">Сообщений: {{ stats.messages }}</span>
+  <span class="chip">Медиа: {{ stats.media }}</span>
+  <span class="chip">Изменено: {{ stats.edited }}</span>
+  <span class="chip">Удалено: {{ stats.deleted }}</span>
+  {% if period %}<span class="chip">{{ period[0] }} — {{ period[1] }}</span>{% endif %}
+</div>
+
+<main>
+{% if not messages %}
+  <div class="day"><span>Сохранённых сообщений нет</span></div>
+{% endif %}
+{% for m in messages %}
+  {% if m.new_day %}
+  <div class="day"><span>{{ m.day }}</span></div>
+  {% endif %}
+  <div class="row {{ 'out' if m.outgoing else 'in' }}{{ ' first' if m.show_sender or m.new_day }}">
+    <div class="bubble{{ ' deleted' if m.deleted_at }}" id="m{{ m.message_id }}">
+      {% if m.show_sender and not m.outgoing %}
+      <div class="sender" style="color: {{ m.color }}">{{ m.sender }}</div>
+      {% endif %}
+      {% if m.reply %}
+      <a class="reply" href="#{{ m.reply.anchor }}">
+        {% if m.reply.sender %}<b>{{ m.reply.sender }}</b>{% endif %}
+        <span>{{ m.reply.text }}</span>
+      </a>
+      {% endif %}
+      {% if m.media %}
+      {% set media = m.media %}
+      <div class="media {{ media.type }}">
+        {% if media.href and media.type == 'photo' %}
+          <a href="{{ media.href }}" target="_blank"><img src="{{ media.href }}" alt="фото" loading="lazy"></a>
+        {% elif media.href and media.type == 'sticker' and media.ext == '.webm' %}
+          <video src="{{ media.href }}" autoplay loop muted playsinline></video>
+        {% elif media.href and media.type == 'sticker' and media.ext != '.tgs' %}
+          <img src="{{ media.href }}" alt="стикер" loading="lazy">
+        {% elif media.href and media.type == 'animation' %}
+          <video src="{{ media.href }}" autoplay loop muted playsinline></video>
+        {% elif media.href and media.type in ('video', 'video_note') %}
+          <video src="{{ media.href }}" controls preload="metadata" playsinline></video>
+        {% elif media.href and media.type in ('voice', 'audio') %}
+          <audio src="{{ media.href }}" controls preload="none"></audio>
+        {% elif media.href %}
+          <a class="file" href="{{ media.href }}" download>
+            <span class="ico">📄</span>
+            <span>{{ media.name }}<small>{{ media.label }} · {{ media.size_label }}</small></span>
+          </a>
+        {% else %}
+          <div class="note">[{{ media.label }}{% if media.size_label %}, {{ media.size_label }}{% endif %}]</div>
+        {% endif %}
+        {% if media.note %}<div class="note">{{ media.note }}</div>{% endif %}
+      </div>
+      {% endif %}
+      {% if m.text %}<span class="text">{{ m.text }}</span>{% endif %}
+      <span class="meta" title="{{ m.full_time }}">
+        {% if m.deleted_at %}<span class="tag-deleted" title="удалено {{ m.deleted_at }}">удалено {{ m.deleted_at }}</span> · {% endif %}
+        {% if m.edited_at %}<span class="tag-edited" title="изменено {{ m.edited_at }}">изменено</span> · {% endif %}
+        {{ m.time }}
+      </span>
+      {% if m.edits %}
+      <details class="history">
+        <summary>История изменений ({{ m.edits | length }})</summary>
+        <ol>
+          {% for e in m.edits %}
+          <li><small>до {{ e.at }}:</small><div class="old">{{ e.text or '—' }}</div></li>
+          {% endfor %}
+        </ol>
+      </details>
+      {% endif %}
+      <div class="clear"></div>
+    </div>
+  </div>
+{% endfor %}
+</main>
+<footer>Экспорт создан {{ generated }}</footer>
+</body>
+</html>
