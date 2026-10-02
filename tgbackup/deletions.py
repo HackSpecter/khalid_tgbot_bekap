@@ -9,7 +9,9 @@ from .db import Database, utcnow
 from .evidence import EVENT_DELETE, EvidenceLog, observed_now
 from .exporter import Exporter
 from .formatting import chat_label, fmt_dt, media_label, sender_label
+from .keyboards import chat_actions
 from .notifier import Notifier, esc
+from .settings import Settings
 
 log = logging.getLogger(__name__)
 
@@ -22,8 +24,10 @@ class DeletionAggregator:
         exporter: Exporter,
         notifier: Notifier | None,
         evidence: EvidenceLog,
+        settings: Settings | None = None,
     ) -> None:
         self.config = config
+        self.settings = settings or Settings(config)
         self.db = db
         self.exporter = exporter
         self.notifier = notifier
@@ -41,7 +45,7 @@ class DeletionAggregator:
         by_chat: dict[int, list] = defaultdict(list)
         async with self._lock:
             for row in await self.db.find_for_deletion(message_ids, chat_id):
-                if row["chat_id"] in self.config.excluded_chat_ids:
+                if self.settings.is_excluded(row["chat_id"]):
                     continue
                 by_chat[row["chat_id"]].append(row)
             if not by_chat:
@@ -83,6 +87,8 @@ class DeletionAggregator:
         if self.notifier is None:
             return
         for chat_id, rows in pending.items():
+            if self.settings.is_muted(chat_id):
+                continue
             try:
                 if len(rows) >= self.config.bulk_delete_threshold:
                     await self.send_chat_export(chat_id, len(rows))
@@ -93,19 +99,16 @@ class DeletionAggregator:
 
     async def send_chat_export(self, chat_id: int, removed: int) -> None:
         chat = await self.db.get_chat(chat_id)
-        label = esc(chat_label(chat, chat_id))
+        label = chat_label(chat, chat_id)
         parts = await self.exporter.export(chat_id)
-        total = len(parts)
-        for index, part in enumerate(parts, 1):
-            suffix = f" (часть {index}/{total})" if total > 1 else ""
-            caption = (
-                f"⚠️ Похоже, чат с <b>{label}</b> был удалён/очищен "
-                f"(удалено {removed} сообщ.). Вот вся сохранённая история{suffix}."
-            )
-            await self.notifier.send_file(part, caption, as_document=True)
+        intro = (
+            f"⚠️ Похоже, чат с <b>{esc(label)}</b> был удалён/очищен "
+            f"(удалено {removed} сообщ.). Вот вся сохранённая история."
+        )
+        await self.notifier.send_export(parts, label, intro, buttons=chat_actions(chat_id))
 
     async def send_deleted(self, chat_id: int, rows: list, deleted_at: str) -> None:
-        if not self.config.notify_own_actions:
+        if not self.settings.get("notify_own_actions"):
             rows = [row for row in rows if not row["outgoing"]]
         if not rows:
             return
@@ -131,7 +134,11 @@ class DeletionAggregator:
                 lines.append(f"Переслано от: {esc(row['fwd_from_name'] or row['fwd_from_id'])}")
             lines += ["", esc(row["text"] or "—")]
             text = "\n".join(lines)
+            if row["outgoing"] and row["read_at"]:
+                lines.insert(4, f"Прочитано собеседником: не позднее {fmt_dt(row['read_at'], tz)}")
+                text = "\n".join(lines)
+            buttons = chat_actions(chat_id)
             if row["media_path"]:
-                await self.notifier.send_media(row["media_path"], text, row["media_type"])
+                await self.notifier.send_media(row["media_path"], text, row["media_type"], buttons=buttons)
             else:
-                await self.notifier.send_text(text)
+                await self.notifier.send_text(text, buttons=buttons)

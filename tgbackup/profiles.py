@@ -13,8 +13,10 @@ from .config import Config
 from .db import Database
 from .evidence import EVENT_PROFILE, EvidenceLog, canonical_json, raw_dict
 from .formatting import full_name
+from .keyboards import chat_actions
 from .media import MediaDownloader
 from .notifier import Notifier, esc
+from .settings import Settings
 
 log = logging.getLogger(__name__)
 
@@ -53,8 +55,10 @@ class ProfileTracker:
         downloader: MediaDownloader,
         notifier: Notifier | None,
         client: TelegramClient,
+        settings: Settings | None = None,
     ) -> None:
         self.config = config
+        self.settings = settings or Settings(config)
         self.db = db
         self.evidence = evidence
         self.downloader = downloader
@@ -141,7 +145,7 @@ class ProfileTracker:
             )
             self._cache[user.id] = current
 
-        if previous is not None and self.notifier is not None:
+        if previous is not None and self.notifier is not None and not self.settings.is_muted(user.id):
             await self.notify(user, changes, stored.path if stored and stored.path else None)
         return changes
 
@@ -157,10 +161,11 @@ class ProfileTracker:
                 new = f"@{new}" if new else None
             lines.append(f"{LABELS[field]}: {esc(old or '—')} → {esc(new or '—')}")
         text = "\n".join(lines)
+        buttons = chat_actions(user.id)
         if photo_path:
-            await self.notifier.send_media(photo_path, text)
+            await self.notifier.send_media(photo_path, text, buttons=buttons)
         else:
-            await self.notifier.send_text(text)
+            await self.notifier.send_text(text, buttons=buttons)
 
     async def sweep(self) -> int:
         since = (datetime.now(timezone.utc) - timedelta(days=self.config.profile_active_days)).isoformat()

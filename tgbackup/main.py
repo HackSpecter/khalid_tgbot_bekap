@@ -24,6 +24,7 @@ from .maintenance import run_maintenance
 from .media import MediaDownloader
 from .notifier import Notifier
 from .profiles import ProfileTracker
+from .settings import Settings
 
 log = logging.getLogger("tgbackup")
 
@@ -108,6 +109,7 @@ async def run(config: Config) -> int:
         return 1
     storage = await open_storage(config)
     db = storage.db
+    settings = await Settings(config, db).load()
     client = create_user_client(config, catch_up=True)
 
     bot: TelegramClient | None = None
@@ -121,22 +123,22 @@ async def run(config: Config) -> int:
             auto_reconnect=True,
             flood_sleep_threshold=300,
         )
-        notifier = Notifier(bot, config.owner_id, storage.vault)
+        notifier = Notifier(bot, config.owner_id, storage.vault, supports_buttons=True)
     else:
         notifier = Notifier(client, "me", storage.vault)
 
     exporter = Exporter(db, config, storage.vault, storage.evidence, storage.signer)
-    deletions = DeletionAggregator(config, db, exporter, notifier, storage.evidence)
+    deletions = DeletionAggregator(config, db, exporter, notifier, storage.evidence, settings)
     downloader = MediaDownloader(client, storage.vault, config.media_max_bytes)
     profiles = (
-        ProfileTracker(config, db, storage.evidence, downloader, notifier, client)
+        ProfileTracker(config, db, storage.evidence, downloader, notifier, client, settings)
         if config.profile_tracking
         else None
     )
-    tracker = Tracker(config, db, downloader, storage.evidence, notifier, deletions, profiles)
+    tracker = Tracker(config, db, downloader, storage.evidence, notifier, deletions, profiles, settings)
     tracker.register(client)
     anchorer = Anchorer(config, db, storage.evidence)
-    commands = Commands(config, db, exporter, notifier, client, tracker, anchorer)
+    commands = Commands(config, db, exporter, notifier, client, tracker, anchorer, settings)
 
     await client.connect()
     if not await client.is_user_authorized():

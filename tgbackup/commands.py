@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from telethon import TelegramClient, events, utils
@@ -14,8 +15,10 @@ from .db import Database
 from .evidence import ChainVerifier
 from .exporter import Exporter
 from .formatting import chat_label, fmt_dt, human_size, media_label, sender_label
+from . import keyboards
 from .handlers import Tracker
 from .notifier import Notifier, esc
+from .settings import TOGGLES, Settings
 from .sync import sync_history
 
 log = logging.getLogger(__name__)
@@ -24,7 +27,7 @@ COMMAND_RE = re.compile(r"^/(\w+)(?:@\w+)?(?:\s+(.*))?$", re.S)
 
 HELP = """<b>Бэкап переписок</b>
 
-/export &lt;@username | chat_id | название&gt; — HTML-экспорт чата (ZIP)
+/export &lt;@username | chat_id | название&gt; — экспорт: PDF + архив с доказательствами
 /deleted &lt;чат&gt; [N] — последние удалённые сообщения
 /search &lt;текст&gt; — поиск по сохранённым сообщениям
 /stats — статистика хранилища
@@ -32,7 +35,18 @@ HELP = """<b>Бэкап переписок</b>
 /profile &lt;чат&gt; — история профиля собеседника
 /verify — проверить хеш-цепочку
 /anchor — заякорить цепочку прямо сейчас (RFC 3161 + OpenTimestamps)
+/settings — настройки кнопками
+/mute, /unmute &lt;чат&gt; — выключить/вернуть уведомления по чату
+/exclude, /include &lt;чат&gt; — перестать/снова сохранять чат
 /help — эта справка"""
+
+
+@dataclass
+class CallbackResult:
+    toast: str = ""
+    text: str | None = None
+    buttons: list | None = None
+    edit_buttons_only: bool = False
 
 
 def dir_size(path: Path) -> tuple[int, int]:
@@ -55,8 +69,10 @@ class Commands:
         user_client: TelegramClient,
         tracker: Tracker,
         anchorer: Anchorer | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self.config = config
+        self.settings = settings or tracker.settings
         self.db = db
         self.exporter = exporter
         self.notifier = notifier
@@ -75,10 +91,99 @@ class Commands:
             "profile": self.cmd_profile,
             "verify": self.cmd_verify,
             "anchor": self.cmd_anchor,
+            "settings": self.cmd_settings,
+            "mute": lambda arg: self.cmd_mute(arg, True),
+            "unmute": lambda arg: self.cmd_mute(arg, False),
+            "exclude": lambda arg: self.cmd_exclude(arg, True),
+            "include": lambda arg: self.cmd_exclude(arg, False),
         }
+        self._background: set[asyncio.Task] = set()
 
     def register_bot(self, bot: TelegramClient, owner_id: int) -> None:
         bot.add_event_handler(self.dispatch, events.NewMessage(incoming=True, from_users=owner_id, pattern=COMMAND_RE))
+        bot.add_event_handler(self.on_callback, events.CallbackQuery(func=lambda e: e.sender_id == owner_id))
+
+    def spawn(self, coro) -> None:
+        task = asyncio.create_task(self._guarded(coro))
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    async def _guarded(self, coro) -> None:
+        try:
+            await coro
+        except Exception as exc:
+            log.exception("Background command failed")
+            await self.notifier.send_text(f"❌ Ошибка: {esc(exc)}")
+
+    async def on_callback(self, event: events.CallbackQuery.Event) -> None:
+        action, value = keyboards.parse(event.data)
+        try:
+            result = await self.handle_callback(action, value)
+        except Exception as exc:
+            log.exception("Callback %s failed", action)
+            await event.answer(f"Ошибка: {exc}"[:180], alert=True)
+            return
+        try:
+            if result.edit_buttons_only:
+                await event.edit(buttons=result.buttons)
+            elif result.text is not None:
+                await event.edit(result.text, buttons=result.buttons, parse_mode="html")
+        except Exception:
+            log.debug("Cannot edit callback message", exc_info=True)
+        await event.answer(result.toast)
+
+    async def handle_callback(self, action: str, value: str) -> CallbackResult:
+        if action == keyboards.EXPORT:
+            self.spawn(self.export_chat(int(value)))
+            return CallbackResult("⏳ Готовлю экспорт…")
+        if action == keyboards.DELETED:
+            self.spawn(self.show_deleted(int(value)))
+            return CallbackResult("📜 Собираю удалённые…")
+        if action == keyboards.MUTE:
+            await self.settings.set_muted(int(value), True)
+            return CallbackResult("🔕 Уведомления по чату выключены", buttons=keyboards.muted_notice(int(value)),
+                                  edit_buttons_only=True)
+        if action == keyboards.UNMUTE:
+            await self.settings.set_muted(int(value), False)
+            return CallbackResult("🔔 Уведомления включены", buttons=keyboards.chat_actions(int(value)),
+                                  edit_buttons_only=True)
+        if action == keyboards.TOGGLE:
+            enabled = await self.settings.toggle(value)
+            text, buttons = self.settings_view()
+            return CallbackResult(f"{TOGGLES[value]}: {'вкл' if enabled else 'выкл'}", text, buttons)
+        if action == keyboards.MENU:
+            if value == "muted":
+                return CallbackResult("", *await self.chat_list_view("muted"))
+            if value == "excluded":
+                return CallbackResult("", *await self.chat_list_view("excluded"))
+            return CallbackResult("", *self.settings_view())
+        if action == keyboards.LIST_UNMUTE:
+            await self.settings.set_muted(int(value), False)
+            return CallbackResult("🔔 Уведомления включены", *await self.chat_list_view("muted"))
+        if action == keyboards.INCLUDE:
+            await self.settings.set_excluded(int(value), False)
+            return CallbackResult("✅ Чат снова сохраняется", *await self.chat_list_view("excluded"))
+        return CallbackResult("Неизвестная кнопка")
+
+    def settings_view(self) -> tuple[str, list]:
+        lines = ["⚙️ <b>Настройки</b>", "", "Что сохранять и о чём уведомлять. Изменения применяются сразу."]
+        return "\n".join(lines), keyboards.settings_main(self.settings)
+
+    async def chat_list_view(self, kind: str) -> tuple[str, list]:
+        ids = sorted(self.settings.muted if kind == "muted" else self.settings.excluded)
+        entries = []
+        for chat_id in ids:
+            chat = await self.db.get_chat(chat_id)
+            entries.append((chat_id, chat_label(chat, chat_id)))
+        if kind == "muted":
+            title = "🔕 <b>Заглушённые чаты</b>\nНажмите, чтобы вернуть уведомления."
+            buttons = keyboards.chat_list(entries, keyboards.LIST_UNMUTE, "🔔")
+        else:
+            title = "🚫 <b>Исключённые чаты</b> (не сохраняются)\nНажмите, чтобы снова сохранять."
+            buttons = keyboards.chat_list(entries, keyboards.INCLUDE, "✅")
+        if not entries:
+            title += "\n\nСписок пуст."
+        return title, buttons
 
     def register_saved(self, client: TelegramClient, me_id: int) -> None:
         client.add_event_handler(
@@ -120,12 +225,14 @@ class Commands:
         if chat is None:
             await self.notifier.send_text(f"Чат «{esc(arg)}» не найден в базе")
             return
-        label = esc(chat_label(chat, chat["id"]))
-        await self.notifier.send_text(f"⏳ Готовлю экспорт: {label}")
-        parts = await self.exporter.export(chat["id"])
-        for index, part in enumerate(parts, 1):
-            suffix = f" — часть {index}/{len(parts)}" if len(parts) > 1 else ""
-            await self.notifier.send_file(part, f"📦 {label}{suffix}", as_document=True)
+        await self.export_chat(chat["id"])
+
+    async def export_chat(self, chat_id: int) -> None:
+        chat = await self.db.get_chat(chat_id)
+        label = chat_label(chat, chat_id)
+        await self.notifier.send_text(f"⏳ Готовлю экспорт: {esc(label)}")
+        parts = await self.exporter.export(chat_id)
+        await self.notifier.send_export(parts, label)
 
     async def cmd_deleted(self, arg: str) -> None:
         if not arg:
@@ -140,8 +247,12 @@ class Commands:
         if chat is None:
             await self.notifier.send_text(f"Чат «{esc(query)}» не найден в базе")
             return
-        rows = await self.db.deleted_messages(chat["id"], limit)
-        label = esc(chat_label(chat, chat["id"]))
+        await self.show_deleted(chat["id"], limit)
+
+    async def show_deleted(self, chat_id: int, limit: int = 30) -> None:
+        chat = await self.db.get_chat(chat_id)
+        rows = await self.db.deleted_messages(chat_id, limit)
+        label = esc(chat_label(chat, chat_id))
         if not rows:
             await self.notifier.send_text(f"В чате {label} удалённых сообщений нет")
             return
@@ -153,9 +264,9 @@ class Commands:
                 f"<b>{esc(sender_label(row))}</b> · {fmt_dt(row['date'], tz, '%d.%m.%y %H:%M')}"
                 f" → удалено {fmt_dt(row['deleted_at'], tz, '%d.%m.%y %H:%M')}"
             )
-            lines.append(f"{media}{esc(row['text'] or '')}".strip() or "—")
+            lines.append(f"{media}{esc(row['text'] or row['service_action'] or '')}".strip() or "—")
             lines.append("")
-        await self.notifier.send_text("\n".join(lines))
+        await self.notifier.send_text("\n".join(lines), buttons=[keyboards.chat_actions(chat_id)[0][:1]])
 
     async def cmd_stats(self, arg: str) -> None:
         stats = await self.db.stats()
@@ -295,3 +406,25 @@ class Commands:
             f"RFC 3161: {esc(result.get('tsa_time') or result.get('tsa_error') or 'выключено')}\n"
             f"OpenTimestamps: {esc(result.get('ots_status') or 'выключено')}"
         )
+
+    async def cmd_settings(self, arg: str) -> None:
+        text, buttons = self.settings_view()
+        await self.notifier.send_text(text, buttons=buttons)
+
+    async def cmd_mute(self, arg: str, muted: bool) -> None:
+        chat = await self.resolve_chat(arg) if arg else None
+        if chat is None:
+            await self.notifier.send_text(f"Использование: /{'mute' if muted else 'unmute'} &lt;чат&gt;")
+            return
+        await self.settings.set_muted(chat["id"], muted)
+        state = "выключены 🔕" if muted else "включены 🔔"
+        await self.notifier.send_text(f"Уведомления по {esc(chat_label(chat, chat['id']))} {state}")
+
+    async def cmd_exclude(self, arg: str, excluded: bool) -> None:
+        chat = await self.resolve_chat(arg) if arg else None
+        if chat is None:
+            await self.notifier.send_text(f"Использование: /{'exclude' if excluded else 'include'} &lt;чат&gt;")
+            return
+        await self.settings.set_excluded(chat["id"], excluded)
+        state = "больше не сохраняется 🚫" if excluded else "снова сохраняется ✅"
+        await self.notifier.send_text(f"{esc(chat_label(chat, chat['id']))} {state}")

@@ -21,7 +21,7 @@ from . import __version__
 from .config import Config
 from .crypto import KeyRing, Signer, Vault, sha256_hex
 from .db import Database, from_iso
-from .evidence import EVENT_DELETE, EVENT_PROFILE, Entry, EvidenceLog, canonical_json
+from .evidence import EVENT_DELETE, EVENT_PROFILE, EVENT_READ, Entry, EvidenceLog, canonical_json
 from .extract import reactions_label
 from .formatting import fmt_dt, full_name, human_size, media_label, sender_label
 
@@ -93,6 +93,9 @@ class MessageView:
     edited_at_utc: str | None
     deleted_at: str | None
     deleted_at_utc: str | None
+    read_at: str | None = None
+    read_at_utc: str | None = None
+    read_seq: int | None = None
     fwd: str | None = None
     reactions: str = ""
     service: str | None = None
@@ -308,6 +311,9 @@ class Exporter:
                 edited_at_utc=utc_label(row["edit_date"]) if row["edited"] else None,
                 deleted_at=fmt_dt(row["deleted_at"], tz) if row["deleted"] else None,
                 deleted_at_utc=utc_label(row["deleted_at"]) if row["deleted"] else None,
+                read_at=fmt_dt(row["read_at"], tz) if row["read_at"] else None,
+                read_at_utc=utc_label(row["read_at"]),
+                read_seq=row["read_seq"],
                 fwd=fwd,
                 reactions=reactions_label(row["reactions"]),
                 service=service,
@@ -373,7 +379,7 @@ class Exporter:
         for entry in context.entries:
             if entry.message_id in ids or entry.event == EVENT_PROFILE:
                 selected.append(entry)
-            elif entry.event == EVENT_DELETE:
+            elif entry.event in (EVENT_DELETE, EVENT_READ):
                 data = json.loads(entry.payload).get("data", {})
                 if ids.intersection(data.get("message_ids", [])):
                     selected.append(entry)
@@ -556,6 +562,8 @@ class Exporter:
                     "record_hash": view.record_hash,
                     "edited_at_utc": view.edited_at_utc,
                     "deleted_at_utc": view.deleted_at_utc,
+                    "read_not_later_than_utc": view.read_at_utc,
+                    "read_seq": view.read_seq,
                     "media_sha256": view.media.sha256 if view.media else None,
                     "media_file": view.media.href if view.media and view.media.rel else None,
                     "evidence_seqs": [e.seq for e in entries if e.message_id == view.message_id],

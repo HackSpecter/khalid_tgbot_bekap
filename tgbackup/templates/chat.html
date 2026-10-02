@@ -121,6 +121,8 @@ main { max-width: 820px; margin: 0 auto; padding: 8px 16px 40px; }
 }
 .out .meta { color: var(--meta-out); }
 .tag-edited { color: var(--edited); }
+.ticks { letter-spacing: -3px; margin-left: 2px; }
+.ticks.read { color: var(--reply-bar); }
 .tag-deleted { color: var(--deleted); font-weight: 600; }
 details.history { clear: both; margin-top: 6px; font-size: 13px; }
 details.history summary { cursor: pointer; color: var(--edited); }
@@ -267,7 +269,7 @@ footer { text-align: center; color: var(--muted); font-size: 12px; padding: 0 16
       <span class="meta" title="{{ m.full_time }}">
         {% if m.deleted_at %}<span class="tag-deleted" title="удалено {{ m.deleted_at }}">удалено {{ m.deleted_at }}</span> · {% endif %}
         {% if m.edited_at %}<span class="tag-edited" title="изменено {{ m.edited_at }}">изменено</span> · {% endif %}
-        {{ m.time }}
+        {{ m.time }}{% if m.outgoing %} <span class="ticks{{ ' read' if m.read_at }}" title="{{ 'прочитано не позднее ' ~ m.read_at if m.read_at else 'прочтение не зафиксировано' }}">{{ '✓✓' if m.read_at else '✓' }}</span>{% endif %}
       </span>
       {% if m.edits %}
       <details class="history">
@@ -280,7 +282,7 @@ footer { text-align: center; color: var(--muted); font-size: 12px; padding: 0 16
       </details>
       {% endif %}
       {% if m.reactions %}<div class="reactions">{{ m.reactions }}</div>{% endif %}
-      <div class="ids">#{{ m.message_id }} · {{ m.utc_time }}{% if m.deleted_at_utc %} · удалено {{ m.deleted_at_utc }}{% endif %}{% if m.edited_at_utc %} · изменено {{ m.edited_at_utc }}{% endif %}{% if m.record_hash %} · sha256 {{ m.record_hash[:16] }}…{% endif %}</div>
+      <div class="ids">#{{ m.message_id }} · {{ m.utc_time }}{% if m.deleted_at_utc %} · удалено {{ m.deleted_at_utc }}{% endif %}{% if m.edited_at_utc %} · изменено {{ m.edited_at_utc }}{% endif %}{% if m.read_at_utc %} · прочитано ≤ {{ m.read_at_utc }}{% endif %}{% if m.record_hash %} · sha256 {{ m.record_hash[:16] }}…{% endif %}</div>
       <div class="clear"></div>
     </div>
   </div>

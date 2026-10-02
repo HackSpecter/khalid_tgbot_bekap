@@ -13,15 +13,22 @@ class FakeNotifier:
         self.texts = []
         self.files = []
         self.media = []
+        self.exports = []
+        self.buttons = []
 
-    async def send_text(self, text):
+    async def send_text(self, text, buttons=None):
         self.texts.append(text)
+        self.buttons.append(buttons)
 
     async def send_file(self, path, caption="", **kwargs):
         self.files.append((path, caption))
 
-    async def send_media(self, rel_path, caption="", media_type=None):
+    async def send_media(self, rel_path, caption="", media_type=None, buttons=None):
         self.media.append((rel_path, caption, media_type))
+        self.buttons.append(buttons)
+
+    async def send_export(self, parts, title, intro="", buttons=None):
+        self.exports.append((parts, title, intro))
 
 
 @pytest.fixture

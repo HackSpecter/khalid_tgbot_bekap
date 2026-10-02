@@ -31,6 +31,7 @@ code, .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 7.5pt; word
 .time { font-size: 7.5pt; color: #555; }
 .flag-del { color: #c00; font-weight: bold; }
 .flag-edit { color: #a66d00; font-weight: bold; }
+.flag-read { color: #1f6fb5; }
 .text { white-space: pre-wrap; word-break: break-word; }
 .reply { border-left: 1.2pt solid #4091de; padding-left: 2mm; color: #444; font-size: 8pt; margin-bottom: 1mm; }
 .fwd { color: #2a6db0; font-size: 8pt; margin-bottom: 1mm; }
@@ -90,6 +91,7 @@ ul.hist { margin: 0; padding-left: 4mm; }
       <span class="time">{{ m.utc_time }} · {{ m.full_time }} ({{ timezone }})</span>
       {% if m.edited_at %}<br><span class="flag-edit">изменено {{ m.edited_at_utc }} · {{ m.edited_at }}</span>{% endif %}
       {% if m.deleted_at %}<br><span class="flag-del">удалено {{ m.deleted_at_utc }} · {{ m.deleted_at }}</span>{% endif %}
+      {% if m.read_at %}<br><span class="flag-read">прочитано собеседником не позднее {{ m.read_at_utc }} · {{ m.read_at }}</span>{% endif %}
     </div>
     {% if m.fwd %}<div class="fwd">↪ Переслано от {{ m.fwd }}</div>{% endif %}
     {% if m.reply %}<div class="reply">в ответ на {% if m.reply.sender %}{{ m.reply.sender }}: {% endif %}{{ m.reply.text }}</div>{% endif %}

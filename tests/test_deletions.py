@@ -59,10 +59,10 @@ async def test_bulk_deletion_sends_export(db, config, exporter, notifier, eviden
     await agg.add(None, [8004, 8005, 8006, 9001])
     await agg.flush()
 
-    assert len(notifier.files) == 1
-    path, caption = notifier.files[0]
-    assert "был удалён/очищен" in caption and "chat8" in caption
-    with zipfile.ZipFile(path) as archive:
+    assert len(notifier.exports) == 1
+    parts, title, intro = notifier.exports[0]
+    assert "был удалён/очищен" in intro and "chat8" in intro and title == "chat8"
+    with zipfile.ZipFile(parts[0]) as archive:
         assert archive.read("chat.html").decode().count("msg ") == 6
         assert "manifest.json" in archive.namelist()
     assert len(notifier.texts) == 1 and "chat9" in notifier.texts[0]

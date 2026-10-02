@@ -8,11 +8,13 @@ from telethon.tl import types
 
 from .config import Config
 from .db import Database, MessageRecord, to_iso
-from .evidence import EVENT_EDIT, EVENT_NEW, EVENT_REACTION, EvidenceLog, raw_dict
+from .evidence import EVENT_EDIT, EVENT_NEW, EVENT_REACTION, EVENT_READ, EvidenceLog, observed_now, raw_dict
 from .extract import describe_action, forward_info, reactions_summary
 from .formatting import chat_label, fmt_dt, full_name, media_label, sender_label
 from .media import MediaDownloader, StoredMedia, describe, inspect
+from .keyboards import chat_actions
 from .notifier import Notifier, esc
+from .settings import Settings
 
 if TYPE_CHECKING:
     from .deletions import DeletionAggregator
@@ -49,8 +51,10 @@ class Tracker:
         notifier: Notifier | None = None,
         deletions: "DeletionAggregator | None" = None,
         profiles: "ProfileTracker | None" = None,
+        settings: Settings | None = None,
     ) -> None:
         self.config = config
+        self.settings = settings or Settings(config)
         self.db = db
         self.downloader = downloader
         self.evidence = evidence
@@ -69,23 +73,24 @@ class Tracker:
             self.on_service, events.Raw(types=[types.UpdateNewMessage, types.UpdateNewChannelMessage])
         )
         client.add_event_handler(self.on_reactions, events.Raw(types=types.UpdateMessageReactions))
+        client.add_event_handler(self.on_read, events.MessageRead(inbox=False))
 
     def is_ignored_chat(self, chat_id: int | None) -> bool:
         if chat_id is None:
             return False
         return (
-            chat_id in self.config.excluded_chat_ids
+            self.settings.is_excluded(chat_id)
             or chat_id == self.me_id
             or chat_id == self.config.notifier_bot_id
         )
 
     def kind_enabled(self, kind: str) -> bool:
         if kind == "private":
-            return self.config.track_private
+            return self.settings.get("track_private")
         if kind in {"group", "supergroup"}:
-            return self.config.track_groups
+            return self.settings.get("track_groups")
         if kind == "channel":
-            return self.config.track_channels
+            return self.settings.get("track_channels")
         return False
 
     def message_kind(self, message) -> str:
@@ -250,8 +255,42 @@ class Tracker:
                 (stored.note if stored else None) or record.media_note,
                 stored.sha256 if stored else None,
             )
-        if notify and self.notifier and (not record.outgoing or self.config.notify_own_actions):
+        if notify and self.should_notify(record.chat_id, record.outgoing):
             await self.notify_edit(old, record, media_changed)
+
+    def should_notify(self, chat_id: int, outgoing: bool = False) -> bool:
+        if self.notifier is None or self.settings.is_muted(chat_id):
+            return False
+        return not outgoing or self.settings.get("notify_own_actions")
+
+    async def apply_read(self, chat_id: int, max_id: int, *, raw=None, source: str = "live") -> int:
+        message_ids = await self.db.unread_outgoing(chat_id, max_id)
+        if not message_ids:
+            return 0
+        observed_at = observed_now()
+        entry = await self.evidence.append(
+            EVENT_READ,
+            chat_id=chat_id,
+            raw=raw,
+            observed_at=observed_at,
+            data={
+                "max_id": max_id,
+                "message_ids": message_ids,
+                "source": source,
+                "meaning": "собеседник прочитал исходящие сообщения не позднее observed_at",
+            },
+        )
+        await self.db.mark_read(chat_id, message_ids, observed_at, entry.seq)
+        return len(message_ids)
+
+    async def on_read(self, event: events.MessageRead.Event) -> None:
+        try:
+            chat_id = event.chat_id
+            if chat_id is None or self.is_ignored_chat(chat_id):
+                return
+            await self.apply_read(chat_id, event.max_id, raw=raw_dict(event.original_update))
+        except Exception:
+            log.exception("Failed to process read receipt")
 
     async def log_reactions(self, chat_id: int, message_id: int, reactions, summary: str | None) -> None:
         await self.evidence.append(
@@ -336,4 +375,4 @@ class Tracker:
                 f"Медиа: {esc(media_label(old['media_type']) or 'нет')} → {esc(media_label(record.media_type) or 'нет')}"
             )
         lines += ["", "<b>Было:</b>", esc(old["text"] or "—"), "", "<b>Стало:</b>", esc(record.text or "—")]
-        await self.notifier.send_text("\n".join(lines))
+        await self.notifier.send_text("\n".join(lines), buttons=chat_actions(record.chat_id))

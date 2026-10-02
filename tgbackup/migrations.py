@@ -170,6 +170,21 @@ BEGIN SELECT RAISE(ABORT, 'original message identity is immutable'); END;
 """
 
 
+V3_GUARDS_READS = """
+CREATE TRIGGER evidence_log_chain_guard BEFORE INSERT ON evidence_log
+WHEN NEW.seq != COALESCE((SELECT MAX(seq) FROM evidence_log), 0) + 1
+    OR NEW.prev_hash != COALESCE(
+        (SELECT entry_hash FROM evidence_log WHERE seq = NEW.seq - 1),
+        '0000000000000000000000000000000000000000000000000000000000000000'
+    )
+BEGIN SELECT RAISE(ABORT, 'evidence chain broken: stale head'); END;
+
+ALTER TABLE messages ADD COLUMN read_at TEXT;
+ALTER TABLE messages ADD COLUMN read_seq INTEGER;
+CREATE INDEX ix_messages_unread_out ON messages (chat_id, outgoing, read_at);
+"""
+
+
 @dataclass(frozen=True)
 class Migration:
     version: int
@@ -180,6 +195,7 @@ class Migration:
 MIGRATIONS = [
     Migration(1, "base schema", V1_BASE),
     Migration(2, "evidence chain, profiles, anchors", V2_EVIDENCE),
+    Migration(3, "chain guard trigger, read receipts", V3_GUARDS_READS),
 ]
 
 LATEST = MIGRATIONS[-1].version

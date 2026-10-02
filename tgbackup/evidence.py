@@ -17,6 +17,7 @@ EVENT_REACTION = "reaction"
 EVENT_MEDIA = "media"
 EVENT_PROFILE = "profile_change"
 EVENT_ANCHOR = "anchor"
+EVENT_READ = "read"
 
 
 def _default(value: Any) -> Any:
@@ -152,19 +153,18 @@ def verify_entries(entries: Iterable[Entry], *, start_prev: str | None = GENESIS
 
 
 class EvidenceLog:
+    MAX_RETRIES = 8
+
     def __init__(self, db) -> None:
         self.db = db
         self._lock = asyncio.Lock()
-        self._head: tuple[int, str] | None = None
 
     async def head(self) -> tuple[int, str]:
-        if self._head is None:
-            async with self.db.conn.execute(
-                "SELECT seq, entry_hash FROM evidence_log ORDER BY seq DESC LIMIT 1"
-            ) as cur:
-                row = await cur.fetchone()
-            self._head = (row["seq"], row["entry_hash"]) if row else (0, GENESIS_HASH)
-        return self._head
+        async with self.db.conn.execute(
+            "SELECT seq, entry_hash FROM evidence_log ORDER BY seq DESC LIMIT 1"
+        ) as cur:
+            row = await cur.fetchone()
+        return (row["seq"], row["entry_hash"]) if row else (0, GENESIS_HASH)
 
     async def append(
         self,
@@ -192,45 +192,51 @@ class EvidenceLog:
         )
         record_hash = hash_text(payload)
         async with self._lock:
-            last_seq, prev_hash = await self.head()
-            seq = last_seq + 1
-            entry = Entry(
-                seq=seq,
-                event=event,
-                chat_id=chat_id,
-                message_id=message_id,
-                observed_at=observed_at,
-                payload=payload,
-                record_hash=record_hash,
-                prev_hash=prev_hash,
-                entry_hash=compute_entry_hash(seq, prev_hash, record_hash),
-                media_sha256=media_sha256,
-                media_path=media_path,
-            )
-            await self.db.conn.execute(
-                """
-                INSERT INTO evidence_log
-                    (seq, event, chat_id, message_id, observed_at, payload, record_hash, prev_hash, entry_hash,
-                     media_sha256, media_path)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    entry.seq,
-                    entry.event,
-                    entry.chat_id,
-                    entry.message_id,
-                    entry.observed_at,
-                    entry.payload,
-                    entry.record_hash,
-                    entry.prev_hash,
-                    entry.entry_hash,
-                    entry.media_sha256,
-                    entry.media_path,
-                ),
-            )
-            await self.db.conn.commit()
-            self._head = (seq, entry.entry_hash)
-        return entry
+            for attempt in range(self.MAX_RETRIES):
+                last_seq, prev_hash = await self.head()
+                seq = last_seq + 1
+                entry = Entry(
+                    seq=seq,
+                    event=event,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    observed_at=observed_at,
+                    payload=payload,
+                    record_hash=record_hash,
+                    prev_hash=prev_hash,
+                    entry_hash=compute_entry_hash(seq, prev_hash, record_hash),
+                    media_sha256=media_sha256,
+                    media_path=media_path,
+                )
+                try:
+                    await self.db.conn.execute(
+                        """
+                        INSERT INTO evidence_log
+                            (seq, event, chat_id, message_id, observed_at, payload, record_hash, prev_hash,
+                             entry_hash, media_sha256, media_path)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            entry.seq,
+                            entry.event,
+                            entry.chat_id,
+                            entry.message_id,
+                            entry.observed_at,
+                            entry.payload,
+                            entry.record_hash,
+                            entry.prev_hash,
+                            entry.entry_hash,
+                            entry.media_sha256,
+                            entry.media_path,
+                        ),
+                    )
+                    await self.db.conn.commit()
+                    return entry
+                except Exception as exc:
+                    if not _is_conflict(exc) or attempt == self.MAX_RETRIES - 1:
+                        raise
+                    await asyncio.sleep(0.05 * (attempt + 1))
+        raise RuntimeError("unreachable")
 
     def iter_all(self, start: int = 1, end: int | None = None, batch: int = 2000) -> "AsyncEntryIterator":
         return AsyncEntryIterator(self.db, start, end, batch)
@@ -245,6 +251,11 @@ class EvidenceLog:
         async with self.db.conn.execute("SELECT * FROM evidence_log WHERE seq = ?", (seq,)) as cur:
             row = await cur.fetchone()
         return Entry.from_row(row) if row else None
+
+
+def _is_conflict(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "unique" in text or "evidence chain" in text or "locked" in text or "busy" in text
 
 
 class AsyncEntryIterator:

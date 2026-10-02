@@ -7,7 +7,9 @@ from dataclasses import dataclass
 
 from telethon import TelegramClient, utils
 from telethon.errors import FloodWaitError
+from telethon.tl import functions
 
+from .evidence import raw_dict
 from .handlers import Tracker, entity_title, entity_type
 
 log = logging.getLogger(__name__)
@@ -74,12 +76,26 @@ async def sync_chat(
                     log.exception("Sync: failed to store %s/%s", utils.get_peer_id(entity), message.id)
                 if remaining is not None:
                     remaining -= 1
+            await sync_read_state(client, tracker, entity)
             return stored
         except FloodWaitError as exc:
             log.warning("Sync flood wait %ss on %s", exc.seconds, utils.get_peer_id(entity))
             await asyncio.sleep(exc.seconds + 1)
             if remaining is not None and remaining <= 0:
                 return stored
+
+
+async def sync_read_state(client: TelegramClient, tracker: Tracker, entity) -> None:
+    try:
+        result = await client(functions.messages.GetPeerDialogsRequest([await client.get_input_entity(entity)]))
+    except Exception as exc:
+        log.debug("Cannot load read state for %s: %s", utils.get_peer_id(entity), exc)
+        return
+    for dialog in result.dialogs:
+        if dialog.read_outbox_max_id:
+            await tracker.apply_read(
+                utils.get_peer_id(dialog.peer), dialog.read_outbox_max_id, raw=raw_dict(dialog), source="sync"
+            )
 
 
 async def sync_history(

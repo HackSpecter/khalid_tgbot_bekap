@@ -287,6 +287,25 @@ class Database:
         )
         await self.conn.commit()
 
+    async def unread_outgoing(self, chat_id: int, max_id: int) -> list[int]:
+        async with self.conn.execute(
+            "SELECT message_id FROM messages WHERE chat_id = ? AND outgoing = 1 AND read_at IS NULL "
+            "AND message_id <= ? AND (media_type IS NULL OR media_type != 'service') ORDER BY message_id",
+            (chat_id, max_id),
+        ) as cur:
+            return [row[0] for row in await cur.fetchall()]
+
+    async def mark_read(self, chat_id: int, message_ids: Sequence[int], read_at: str, seq: int) -> None:
+        for start in range(0, len(message_ids), 500):
+            chunk = list(message_ids[start : start + 500])
+            marks = ",".join("?" * len(chunk))
+            await self.conn.execute(
+                f"UPDATE messages SET read_at = ?, read_seq = ? WHERE chat_id = ? AND message_id IN ({marks}) "
+                "AND read_at IS NULL",
+                [read_at, seq, chat_id, *chunk],
+            )
+        await self.conn.commit()
+
     async def get_message(self, chat_id: int, message_id: int) -> aiosqlite.Row | None:
         async with self.conn.execute(
             "SELECT * FROM messages WHERE chat_id = ? AND message_id = ?", (chat_id, message_id)
