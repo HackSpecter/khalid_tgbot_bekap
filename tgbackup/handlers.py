@@ -10,10 +10,11 @@ from .config import Config
 from .db import Database, MessageRecord, to_iso
 from .evidence import EVENT_EDIT, EVENT_NEW, EVENT_REACTION, EVENT_READ, EvidenceLog, observed_now, raw_dict
 from .extract import describe_action, forward_info, reactions_summary
-from .formatting import chat_label, fmt_dt, full_name, media_label, sender_label
+from .cards import edited_card
+from .formatting import full_name, media_label
 from .media import MediaDownloader, StoredMedia, describe, inspect
 from .keyboards import chat_actions
-from .notifier import Notifier, esc
+from .notifier import Notifier
 from .settings import Settings
 
 if TYPE_CHECKING:
@@ -363,17 +364,8 @@ class Tracker:
 
     async def notify_edit(self, old, record: MessageRecord, media_changed: bool) -> None:
         chat = await self.db.get_chat(record.chat_id)
-        tz = self.config.timezone
-        lines = [
-            "✏️ <b>Сообщение изменено</b>",
-            f"Чат: {esc(chat_label(chat, record.chat_id))}",
-            f"От: {esc(sender_label(old))}",
-            f"Отправлено: {fmt_dt(old['date'], tz)}",
-            f"Изменено: {fmt_dt(record.edit_date, tz)}",
-        ]
+        media_change = None
         if media_changed:
-            lines.append(
-                f"Медиа: {esc(media_label(old['media_type']) or 'нет')} → {esc(media_label(record.media_type) or 'нет')}"
-            )
-        lines += ["", "<b>Было:</b>", esc(old["text"] or "—"), "", "<b>Стало:</b>", esc(record.text or "—")]
-        await self.notifier.send_text("\n".join(lines), buttons=chat_actions(record.chat_id))
+            media_change = (media_label(old["media_type"]) or "нет", media_label(record.media_type) or "нет")
+        text = edited_card(old, record.text, record.edit_date, media_change, chat, self.config.timezone)
+        await self.notifier.send_text(text, buttons=chat_actions(record.chat_id))

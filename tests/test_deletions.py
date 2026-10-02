@@ -1,7 +1,9 @@
+import asyncio
 import json
 import zipfile
 from dataclasses import replace
 
+from tgbackup.cards import moment
 from tgbackup.db import MessageRecord
 from tgbackup.deletions import DeletionAggregator
 from tgbackup.evidence import EVENT_DELETE
@@ -65,7 +67,7 @@ async def test_bulk_deletion_sends_export(db, config, exporter, notifier, eviden
     with zipfile.ZipFile(parts[0]) as archive:
         assert archive.read("chat.html").decode().count("msg ") == 6
         assert "manifest.json" in archive.namelist()
-    assert len(notifier.texts) == 1 and "chat9" in notifier.texts[0]
+    assert len(notifier.texts) == 1 and 'tg://user?id=9' in notifier.texts[0]
 
 
 async def test_own_deletions_are_silent_by_default(db, config, exporter, notifier, evidence):
@@ -91,3 +93,19 @@ async def test_media_sent_with_deleted_message(db, config, exporter, notifier, e
 
     assert notifier.media and notifier.media[0][0] == rel
     assert "смотри" in notifier.media[0][1] and notifier.media[0][2] == "photo"
+
+
+async def test_each_message_gets_its_own_deletion_time(db, config, exporter, notifier, evidence):
+    agg = aggregator(config, db, exporter, notifier, evidence, bulk_delete_threshold=5)
+    await seed(db, evidence, 6, 2)
+    await agg.add(None, [6001])
+    first = (await db.get_message(6, 6001))["deleted_at"]
+    await asyncio.sleep(1.1)
+    await agg.add(None, [6002])
+    second = (await db.get_message(6, 6002))["deleted_at"]
+    await agg.flush()
+
+    assert first != second
+    assert f"удалено {moment(first, config.timezone)}" in notifier.texts[0]
+    assert f"удалено {moment(second, config.timezone)}" in notifier.texts[1]
+    assert "<blockquote>msg 2</blockquote>" in notifier.texts[1]

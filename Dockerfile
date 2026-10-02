@@ -24,7 +24,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY tgbackup ./tgbackup
-COPY login.py initial_sync.py verify.py ./
+COPY login.py initial_sync.py verify.py watchdog.py ./
 RUN mkdir -p /app/data && chown app:app /app/data
 
 USER app

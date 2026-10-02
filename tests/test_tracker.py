@@ -96,8 +96,8 @@ async def test_full_lifecycle_is_chained(tracker, client, user, db, evidence, no
 
     new_entry = await evidence.entry_at(row1["first_seq"])
     assert json.loads(new_entry.payload)["raw"]["message"] == "hello"
-    assert any("Было:" in text and "hello edited" in text for text in notifier.texts)
-    assert any("Сообщение удалено" in text for text in notifier.texts)
+    assert any("<b>Было</b>" in text and "<blockquote>hello edited</blockquote>" in text for text in notifier.texts)
+    assert any("Удалено сообщение" in text for text in notifier.texts)
 
 
 async def test_profile_change_detected_and_notified(tracker, client, user, db, notifier):
@@ -110,7 +110,7 @@ async def test_profile_change_detected_and_notified(tracker, client, user, db, n
     changes = json.loads(history[1]["changes"])
     assert changes == {"first_name": ["Ali", "Alisher"], "username": ["ali", "alisher"]}
     assert history[1]["phone"] == "992111"
-    assert any("Профиль изменён" in text and "Alisher" in text for text in notifier.texts)
+    assert any("Профиль изменён" in text and "<s>Ali</s> → <b>Alisher</b>" in text for text in notifier.texts)
 
 
 async def test_view_once_media_is_skipped(tracker, client, user, db):

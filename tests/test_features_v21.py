@@ -132,7 +132,8 @@ async def test_callbacks(commands, db, evidence, notifier, settings):
     await seed(db, evidence)
     result = await commands.handle_callback(keyboards.MUTE, str(CHAT))
     assert settings.is_muted(CHAT) and result.edit_buttons_only
-    assert flat(result.buttons, "data") == [keyboards.data(keyboards.UNMUTE, CHAT)]
+    assert keyboards.data(keyboards.UNMUTE, CHAT) in flat(result.buttons, "data")
+    assert keyboards.data(keyboards.MUTE, CHAT) not in flat(result.buttons, "data")
 
     result = await commands.handle_callback(keyboards.MENU, "muted")
     assert "Заглушённые" in result.text and b"v:42" in flat(result.buttons, "data")

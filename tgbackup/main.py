@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from telethon import TelegramClient
+from telethon.errors import RPCError, UnauthorizedError
+from telethon.tl import functions
 
 from .anchoring import Anchorer
 from .commands import Commands
@@ -20,6 +22,7 @@ from .deletions import DeletionAggregator
 from .evidence import EvidenceLog
 from .exporter import Exporter
 from .handlers import Tracker
+from .health import STATUS_STOPPING, STATUS_UNAUTHORIZED, Health, run_heartbeat
 from .maintenance import run_maintenance
 from .media import MediaDownloader
 from .notifier import Notifier
@@ -29,6 +32,7 @@ from .settings import Settings
 log = logging.getLogger("tgbackup")
 
 RECONNECT_DELAY = 15
+SESSION_CHECK_INTERVAL = 600
 
 
 def create_user_client(config: Config, *, catch_up: bool = False) -> TelegramClient:
@@ -80,7 +84,7 @@ def secure_sessions(config: Config) -> None:
                 os.chmod(path, 0o600)
 
 
-async def keep_connected(client: TelegramClient, name: str, stop: asyncio.Event) -> None:
+async def keep_connected(client: TelegramClient, name: str, stop: asyncio.Event, on_reconnect=None) -> None:
     while not stop.is_set():
         disconnected = asyncio.ensure_future(client.disconnected)
         stopping = asyncio.ensure_future(stop.wait())
@@ -98,6 +102,8 @@ async def keep_connected(client: TelegramClient, name: str, stop: asyncio.Event)
                 await client.connect()
                 if client.is_connected():
                     log.info("%s reconnected", name)
+                    if on_reconnect is not None:
+                        await on_reconnect()
                     break
             except Exception as exc:
                 log.warning("%s reconnect failed: %s", name, exc)
@@ -140,13 +146,23 @@ async def run(config: Config) -> int:
     anchorer = Anchorer(config, db, storage.evidence)
     commands = Commands(config, db, exporter, notifier, client, tracker, anchorer, settings)
 
+    health = Health(config.data_dir / "heartbeat.json")
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        with contextlib.suppress(NotImplementedError):
+            loop.add_signal_handler(sig, stop.set)
+
     await client.connect()
     if not await client.is_user_authorized():
         log.error("Session is not authorized. Run `python login.py` interactively first.")
         await client.disconnect()
         await storage.close()
+        health.status = STATUS_UNAUTHORIZED
+        await run_heartbeat(health, client, None, None, stop)
         return 2
     me = await client.get_me()
+    health.account = me.username or str(me.id)
     tracker.me_id = me.id
     if profiles is not None:
         profiles.me_id = me.id
@@ -159,18 +175,43 @@ async def run(config: Config) -> int:
         commands.register_saved(client, me.id)
     secure_sessions(config)
 
-    stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        with contextlib.suppress(NotImplementedError):
-            loop.add_signal_handler(sig, stop.set)
+    async def check_session() -> None:
+        if health.status == STATUS_UNAUTHORIZED:
+            return
+        try:
+            await client(functions.updates.GetStateRequest())
+            return
+        except UnauthorizedError as exc:
+            reason = type(exc).__name__
+        except RPCError as exc:
+            if "AUTH_KEY" not in str(exc).upper() and "SESSION" not in str(exc).upper():
+                return
+            reason = type(exc).__name__
+        except Exception:
+            return
+        health.status = STATUS_UNAUTHORIZED
+        health.write()
+        log.error("Telegram session was revoked: %s", reason)
+        await notifier.send_text(
+            "🚨 <b>Сеанс Telegram завершён</b>\nБэкап остановлен: сеанс сервера удалён из «Устройств» "
+            f"или аккаунт разлогинен ({reason}). Нужен повторный вход."
+        )
+
+    async def monitor_session() -> None:
+        while not stop.is_set():
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=SESSION_CHECK_INTERVAL)
+            except asyncio.TimeoutError:
+                await check_session()
 
     await client.catch_up()
     log.info("Backup is running (notifications via %s)", "bot" if bot else "Saved Messages")
     await notifier.send_text("✅ Бэкап переписок запущен")
 
     watchers = [
-        asyncio.create_task(keep_connected(client, "userbot", stop)),
+        asyncio.create_task(keep_connected(client, "userbot", stop, check_session)),
+        asyncio.create_task(run_heartbeat(health, client, bot, db, stop)),
+        asyncio.create_task(monitor_session()),
         asyncio.create_task(anchorer.run_scheduler(stop)),
     ]
     if profiles is not None:
@@ -182,6 +223,9 @@ async def run(config: Config) -> int:
         await stop.wait()
     finally:
         log.info("Shutting down")
+        health.status = STATUS_STOPPING
+        with contextlib.suppress(Exception):
+            health.write()
         for task in watchers:
             task.cancel()
         with contextlib.suppress(Exception):

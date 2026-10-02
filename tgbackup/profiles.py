@@ -12,10 +12,11 @@ from telethon.tl import functions, types
 from .config import Config
 from .db import Database
 from .evidence import EVENT_PROFILE, EvidenceLog, canonical_json, raw_dict
+from .cards import profile_card
 from .formatting import full_name
 from .keyboards import chat_actions
 from .media import MediaDownloader
-from .notifier import Notifier, esc
+from .notifier import Notifier
 from .settings import Settings
 
 log = logging.getLogger(__name__)
@@ -151,16 +152,15 @@ class ProfileTracker:
 
     async def notify(self, user: types.User, changes: dict, photo_path: str | None) -> None:
         name = full_name(user.first_name, user.last_name) or str(user.id)
-        lines = [f"👤 <b>Профиль изменён</b>: {esc(name)} (id {user.id})", ""]
-        for field, (old, new) in changes.items():
-            if field == "photo_id":
-                lines.append(f"{LABELS[field]}: {'новое фото' if new else 'удалено или скрыто'}")
-                continue
-            if field == "username":
-                old = f"@{old}" if old else None
-                new = f"@{new}" if new else None
-            lines.append(f"{LABELS[field]}: {esc(old or '—')} → {esc(new or '—')}")
-        text = "\n".join(lines)
+        rows = []
+        for field_name, (old, new) in changes.items():
+            if field_name == "photo_id":
+                rows.append((LABELS[field_name], "старое" if old else None, "новое" if new else None))
+            elif field_name == "username":
+                rows.append((LABELS[field_name], f"@{old}" if old else None, f"@{new}" if new else None))
+            else:
+                rows.append((LABELS[field_name], old, new))
+        text = profile_card(user.id, name, rows)
         buttons = chat_actions(user.id)
         if photo_path:
             await self.notifier.send_media(photo_path, text, buttons=buttons)

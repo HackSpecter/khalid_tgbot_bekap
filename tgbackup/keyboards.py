@@ -26,15 +26,21 @@ def parse(raw: bytes) -> tuple[str, str]:
 def chat_actions(chat_id: int) -> list[list[Button]]:
     return [
         [
-            Button.inline("📦 Экспорт чата", data(EXPORT, chat_id)),
-            Button.inline("📜 Все удалённые", data(DELETED, chat_id)),
+            Button.inline("📦 Экспорт", data(EXPORT, chat_id)),
+            Button.inline("🗂 Удалённые", data(DELETED, chat_id)),
+            Button.inline("🔕 Тихо", data(MUTE, chat_id)),
         ],
-        [Button.inline("🔕 Не уведомлять об этом чате", data(MUTE, chat_id))],
     ]
 
 
 def muted_notice(chat_id: int) -> list[list[Button]]:
-    return [[Button.inline("🔔 Вернуть уведомления", data(UNMUTE, chat_id))]]
+    return [
+        [
+            Button.inline("📦 Экспорт", data(EXPORT, chat_id)),
+            Button.inline("🗂 Удалённые", data(DELETED, chat_id)),
+            Button.inline("🔔 Вернуть", data(UNMUTE, chat_id)),
+        ]
+    ]
 
 
 def settings_main(settings: Settings) -> list[list[Button]]:
