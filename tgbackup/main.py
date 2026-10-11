@@ -171,6 +171,7 @@ async def run(config: Config) -> int:
     if bot is not None:
         commands.register_bot(bot, config.owner_id)
         await bot.start(bot_token=config.notify_bot_token)
+        await commands.publish_menu(bot, config.owner_id)
     else:
         commands.register_saved(client, me.id)
     secure_sessions(config)

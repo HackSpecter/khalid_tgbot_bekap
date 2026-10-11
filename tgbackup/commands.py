@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from telethon import TelegramClient, events, utils
+from telethon.tl.functions.bots import SetBotCommandsRequest
+from telethon.tl.types import BotCommand, BotCommandScopeDefault, BotCommandScopePeer
 
 from .anchoring import Anchorer
 from .config import Config
@@ -59,6 +61,24 @@ def dir_size(path: Path) -> tuple[int, int]:
     return total, files
 
 
+COMMAND_MENU = [
+    ("help", "справка по всем командам"),
+    ("export", "экспорт чата: PDF + архив доказательств"),
+    ("deleted", "удалённые сообщения чата"),
+    ("search", "поиск по сохранённым сообщениям"),
+    ("stats", "статистика хранилища"),
+    ("profile", "история профиля собеседника"),
+    ("settings", "настройки кнопками"),
+    ("mute", "не уведомлять о чате"),
+    ("unmute", "вернуть уведомления по чату"),
+    ("exclude", "перестать сохранять чат"),
+    ("include", "снова сохранять чат"),
+    ("sync", "догрузить историю чата"),
+    ("verify", "проверить хеш-цепочку"),
+    ("anchor", "поставить метку времени сейчас"),
+]
+
+
 class Commands:
     def __init__(
         self,
@@ -102,6 +122,15 @@ class Commands:
     def register_bot(self, bot: TelegramClient, owner_id: int) -> None:
         bot.add_event_handler(self.dispatch, events.NewMessage(incoming=True, from_users=owner_id, pattern=COMMAND_RE))
         bot.add_event_handler(self.on_callback, events.CallbackQuery(func=lambda e: e.sender_id == owner_id))
+
+    async def publish_menu(self, bot: TelegramClient, owner_id: int) -> None:
+        commands = [BotCommand(name, description) for name, description in COMMAND_MENU]
+        try:
+            peer = await bot.get_input_entity(owner_id)
+            await bot(SetBotCommandsRequest(scope=BotCommandScopePeer(peer), lang_code="", commands=commands))
+            await bot(SetBotCommandsRequest(scope=BotCommandScopeDefault(), lang_code="", commands=commands))
+        except Exception:
+            log.exception("Cannot publish bot command menu")
 
     def spawn(self, coro) -> None:
         task = asyncio.create_task(self._guarded(coro))

@@ -184,3 +184,13 @@ async def test_saved_messages_mode_drops_buttons():
     notifier = Notifier(client, "me")
     await notifier.send_text("hi", buttons=keyboards.chat_actions(CHAT))
     assert client.calls == [("text", "hi", None)]
+
+
+async def test_command_menu_covers_all_handlers(commands):
+    from tgbackup.commands import COMMAND_MENU
+
+    menu_names = {name for name, _ in COMMAND_MENU}
+    handler_names = set(commands.handlers) - {"start"}
+    assert menu_names == handler_names
+    assert all(1 <= len(name) <= 32 and name.islower() for name, _ in COMMAND_MENU)
+    assert all(1 <= len(desc) <= 256 for _, desc in COMMAND_MENU)
