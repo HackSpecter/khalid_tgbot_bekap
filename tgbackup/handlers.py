@@ -216,7 +216,7 @@ class Tracker:
             data=data,
         )
         await self.db.link_evidence(record.chat_id, record.message_id, entry.seq, entry.record_hash)
-        if record.view_once and self.notifier is not None and not record.outgoing:
+        if record.view_once and self.should_notify(record.chat_id, record.outgoing):
             await self.notify_view_once(record, stored)
         return record
 
