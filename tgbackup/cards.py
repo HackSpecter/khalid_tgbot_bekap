@@ -110,6 +110,24 @@ def edited_card(old: Mapping, new_text: str | None, edit_date: str | None, media
     return "\n".join(lines)
 
 
+def view_once_card(record, stored, chat: Mapping | None, tz: ZoneInfo) -> str:
+    label = MEDIA_ICONS.get(record.media_type, f"📎 {record.media_type}")
+    lines = [
+        "🔥 <b>View-once перехвачено</b>",
+        person(record.sender_id, record.sender_name, record.sender_username, record.outgoing),
+    ]
+    group = chat_line(chat, record.chat_id)
+    if group:
+        lines.append(group)
+    lines.append(f"Тип: {label}")
+    if stored and stored.path:
+        lines.append(f"Сохранено: <code>data/{esc(stored.path)}</code>")
+    else:
+        lines.append(f"⚠️ {esc((stored.note if stored else None) or 'не удалось сохранить')}")
+    lines.append(f"<i>🕐 {moment(record.date, tz)}</i>")
+    return "\n".join(lines)
+
+
 def profile_card(user_id: int, name: str, changes: list[tuple[str, str | None, str | None]]) -> str:
     lines = ["🪪 <b>Профиль изменён</b>", f'👤 <a href="tg://user?id={user_id}">{esc(name)}</a> · <code>{user_id}</code>', ""]
     for label, old, new in changes:

@@ -10,7 +10,7 @@ from .config import Config
 from .db import Database, MessageRecord, to_iso
 from .evidence import EVENT_EDIT, EVENT_NEW, EVENT_REACTION, EVENT_READ, EvidenceLog, observed_now, raw_dict
 from .extract import describe_action, forward_info, reactions_summary
-from .cards import edited_card
+from .cards import edited_card, view_once_card
 from .formatting import full_name, media_label
 from .media import MediaDownloader, StoredMedia, describe, inspect
 from .keyboards import chat_actions
@@ -137,9 +137,7 @@ class Tracker:
 
         service = isinstance(message, types.MessageService)
         info = None if service else inspect(message)
-        note = None
-        if info is not None:
-            note = "самоуничтожающееся медиа не сохраняется" if info.ephemeral else describe(message, info)
+        note = describe(message, info) if info is not None else None
         fwd_id, fwd_name, fwd_date = (None, None, None) if service else forward_info(message)
         reply_to = message.reply_to.reply_to_msg_id if isinstance(message.reply_to, types.MessageReplyHeader) else None
 
@@ -158,6 +156,7 @@ class Tracker:
             media_uid=info.uid if info else None,
             media_size=info.size if info else None,
             media_note=note,
+            view_once=bool(info and info.ephemeral),
             edited=not service and message.edit_date is not None,
             edit_date=None if service else to_iso(message.edit_date),
             fwd_from_id=fwd_id,
@@ -204,6 +203,9 @@ class Tracker:
         if with_media and record.media_uid:
             stored = await self.fetch_media(message, record)
 
+        data = {"source": source, "media_note": (stored.note if stored else None) or record.media_note}
+        if record.view_once:
+            data["view_once"] = True
         entry = await self.evidence.append(
             EVENT_NEW,
             chat_id=record.chat_id,
@@ -211,9 +213,11 @@ class Tracker:
             raw=raw_dict(message),
             media_sha256=stored.sha256 if stored else None,
             media_path=stored.path if stored else None,
-            data={"source": source, "media_note": (stored.note if stored else None) or record.media_note},
+            data=data,
         )
         await self.db.link_evidence(record.chat_id, record.message_id, entry.seq, entry.record_hash)
+        if record.view_once and self.notifier is not None and not record.outgoing:
+            await self.notify_view_once(record, stored)
         return record
 
     async def apply_edit(self, old, message, *, notify: bool = True, with_media: bool = True) -> None:
@@ -361,6 +365,15 @@ class Tracker:
             await self.deletions.add(chat_id, list(event.deleted_ids), raw_dict(event.original_update))
         except Exception:
             log.exception("Failed to process deletion %s", getattr(event, "deleted_ids", None))
+
+    async def notify_view_once(self, record: MessageRecord, stored: StoredMedia | None) -> None:
+        chat_row = await self.db.get_chat(record.chat_id)
+        card = view_once_card(record, stored, chat_row, self.config.timezone)
+        buttons = chat_actions(record.chat_id)
+        if stored and stored.path:
+            await self.notifier.send_media(stored.path, card, record.media_type, buttons=buttons)
+        else:
+            await self.notifier.send_text(card, buttons=buttons)
 
     async def notify_edit(self, old, record: MessageRecord, media_changed: bool) -> None:
         chat = await self.db.get_chat(record.chat_id)

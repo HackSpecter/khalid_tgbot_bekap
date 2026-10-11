@@ -58,6 +58,7 @@ class MessageRecord:
     media_path: str | None = None
     media_size: int | None = None
     media_note: str | None = None
+    view_once: bool = False
     edited: bool = False
     edit_date: str | None = None
     fwd_from_id: int | None = None
@@ -226,6 +227,7 @@ class Database:
         data = asdict(record)
         data["outgoing"] = int(record.outgoing)
         data["edited"] = int(record.edited)
+        data["view_once"] = int(record.view_once)
         data["saved_at"] = utcnow()
         columns = ", ".join(data)
         placeholders = ", ".join(f":{key}" for key in data)

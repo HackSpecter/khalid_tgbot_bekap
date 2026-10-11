@@ -129,9 +129,7 @@ class MediaDownloader:
         self._semaphore = asyncio.Semaphore(concurrency)
 
     async def download(self, message: Message, chat_id: int, info: MediaInfo) -> StoredMedia:
-        if info.ephemeral:
-            return StoredMedia(None, "самоуничтожающееся медиа не сохраняется")
-        if not info.downloadable:
+        if not (info.downloadable or info.ephemeral):
             return StoredMedia(None, None)
         if info.size is not None and info.size > self.max_bytes:
             return StoredMedia(
@@ -145,11 +143,7 @@ class MediaDownloader:
         rel = f"media/{chat_id}/{message.id}_{suffix}{ext}"
 
         async with self._semaphore:
-            try:
-                data = await self.client.download_media(message, file=bytes)
-            except Exception:
-                log.exception("Media download failed chat=%s msg=%s", chat_id, message.id)
-                return StoredMedia(None, "не удалось скачать медиа")
+            data = await self._grab(message, chat_id)
         if not data:
             return StoredMedia(None, "не удалось скачать медиа")
         stored, digest, size = await asyncio.to_thread(self.vault.write, rel, data)
@@ -157,6 +151,19 @@ class MediaDownloader:
         if info.type in THUMB_TYPES and not (info.type == "sticker" and ext in STATIC_STICKER_EXT):
             thumb = await self.download_thumb(message, f"media/{chat_id}/{message.id}_{suffix}_thumb")
         return StoredMedia(stored, None, digest, size, thumb)
+
+    async def _grab(self, message: Message, chat_id: int) -> bytes | None:
+        try:
+            return await self.client.download_media(message, file=bytes)
+        except Exception:
+            log.exception("Media download failed chat=%s msg=%s", chat_id, message.id)
+        document = getattr(message.media, "document", None)
+        if document is not None:
+            try:
+                return await self.client.download_media(document, file=bytes)
+            except Exception:
+                log.debug("Document fallback download failed msg=%s", message.id, exc_info=True)
+        return None
 
     async def download_thumb(self, message: Message, rel_base: str) -> str | None:
         document = message.document

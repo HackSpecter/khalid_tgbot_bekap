@@ -190,6 +190,12 @@ ALTER TABLE messages ADD COLUMN thumb_path TEXT;
 """
 
 
+V5_VIEW_ONCE = """
+ALTER TABLE messages ADD COLUMN view_once INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS ix_messages_view_once ON messages (view_once);
+"""
+
+
 @dataclass(frozen=True)
 class Migration:
     version: int
@@ -202,6 +208,7 @@ MIGRATIONS = [
     Migration(2, "evidence chain, profiles, anchors", V2_EVIDENCE),
     Migration(3, "chain guard trigger, read receipts", V3_GUARDS_READS),
     Migration(4, "media thumbnails", V4_THUMBS),
+    Migration(5, "view-once capture flag", V5_VIEW_ONCE),
 ]
 
 LATEST = MIGRATIONS[-1].version

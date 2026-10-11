@@ -113,13 +113,25 @@ async def test_profile_change_detected_and_notified(tracker, client, user, db, n
     assert any("Профиль изменён" in text and "<s>Ali</s> → <b>Alisher</b>" in text for text in notifier.texts)
 
 
-async def test_view_once_media_is_skipped(tracker, client, user, db):
+async def test_view_once_media_is_captured(tracker, client, user, db, evidence, notifier, vault):
+    async def fake_download(media, file=None, **kwargs):
+        return b"secret-view-once-bytes"
+
+    tracker.downloader.client.download_media = fake_download
     photo = types.MessageMediaPhoto(
         photo=types.Photo(id=9, access_hash=1, file_reference=b"", date=None,
                           sizes=[types.PhotoSize("x", 1, 1, 100)], dc_id=2),
         ttl_seconds=10,
     )
     await tracker.on_new(Event(message(client, user, 5, "", media=photo)))
+
     row = await db.get_message(42, 5)
-    assert row["media_path"] is None
-    assert "самоуничтожающееся" in row["media_note"]
+    assert row["view_once"] == 1
+    assert row["media_path"] is not None
+    assert vault.read(row["media_path"]) == b"secret-view-once-bytes"
+
+    entry = await evidence.entry_at(row["first_seq"])
+    assert json.loads(entry.payload)["data"]["view_once"] is True
+    assert any("View-once перехвачено" in text for text in notifier.texts) or any(
+        "View-once перехвачено" in caption for _, caption, _ in notifier.media
+    )
