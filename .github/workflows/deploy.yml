@@ -15,11 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: docker build -t tgbackup:ci .
+        run: docker build -t khalid-tgbackup:latest .
       - name: Run test suite
         run: |
-          docker build -f Dockerfile.test -t tgbackup:ci-test .
-          docker run --rm tgbackup:ci-test python -m pytest -q -p no:cacheprovider
+          docker build -f Dockerfile.test -t tgbackup-test .
+          docker run --rm tgbackup-test python -m pytest -q -p no:cacheprovider
 
   deploy:
     needs: test
