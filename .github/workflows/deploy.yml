@@ -1,0 +1,87 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t tgbackup:ci .
+      - name: Run test suite
+        run: |
+          docker build -f Dockerfile.test -t tgbackup:ci-test .
+          docker run --rm tgbackup:ci-test python -m pytest -q -p no:cacheprovider
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Rsync code to server
+        run: |
+          rsync -az --delete \
+            --exclude='.git' --exclude='__pycache__' --exclude='.pytest_cache' \
+            --exclude='/.env' --exclude='/data' \
+            -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o IdentitiesOnly=yes" \
+            ./ "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/khalid_tgbot_bekap/"
+
+      - name: Build, back up DB, deploy with rollback
+        run: |
+          ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o IdentitiesOnly=yes \
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" 'bash -s' <<'EOF'
+          set -euo pipefail
+          cd ~/khalid_tgbot_bekap
+
+          OLD_IMAGE=$(docker image inspect khalid-tgbackup:latest -f '{{.Id}}' 2>/dev/null || echo none)
+          docker tag khalid-tgbackup:latest khalid-tgbackup:rollback 2>/dev/null || true
+
+          docker compose build
+
+          mkdir -p ~/tgbackup_backups
+          docker compose stop -t 40
+          tar czf ~/tgbackup_backups/data-ci-$(date +%Y%m%d-%H%M%S).tgz -C ~/khalid_tgbot_bekap data/backup.db data/keys 2>/dev/null || true
+          ls -1t ~/tgbackup_backups/data-ci-*.tgz 2>/dev/null | tail -n +15 | xargs -r rm -f
+
+          docker compose up -d --force-recreate
+
+          echo "Ждём health-check…"
+          ok=0
+          for i in $(seq 1 24); do
+            sleep 5
+            status=$(docker inspect khalid_tgbackup -f '{{.State.Health.Status}}' 2>/dev/null || echo starting)
+            if [ "$status" = "healthy" ]; then ok=1; break; fi
+            if [ "$status" = "unhealthy" ]; then break; fi
+          done
+
+          if [ "$ok" != "1" ]; then
+            echo "::error::Health-check не прошёл (status=$status), откат"
+            docker compose logs --since 3m tgbackup | tail -30
+            if docker image inspect khalid-tgbackup:rollback >/dev/null 2>&1; then
+              docker tag khalid-tgbackup:rollback khalid-tgbackup:latest
+              docker compose up -d --force-recreate
+              echo "Откат на предыдущий образ выполнен"
+            fi
+            exit 1
+          fi
+
+          docker image prune -f >/dev/null 2>&1 || true
+          echo "✅ Деплой успешен, бот healthy"
+          EOF
