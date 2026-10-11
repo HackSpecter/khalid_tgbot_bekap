@@ -1,13 +1,13 @@
 .env
-data/
+/data/
 *.session
 *.session-journal
 *.db
 *.db-wal
 *.db-shm
-media/
-exports/
-logs/
+/media/
+/exports/
+/logs/
 __pycache__/
 *.pyc
 .pytest_cache/
